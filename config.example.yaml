@@ -1,0 +1,86 @@
+# Janus-Graph Configuration
+
+# 1. FalkorDB / Redis Engine Settings
+engine:
+  host: "127.0.0.1"
+  port: 6379
+  bin_dir: "./bin"
+  data_dir: "./data/falkordb"
+  pid_file: "./data/falkordb/falkordb.pid"
+  log_file: "./data/logs/falkordb.log"
+  save_interval_sec: 900
+  max_memory_mb: 1024
+
+# 2. Graphiti Knowledge Graph Core & LLM
+graphiti:
+  group_id: "picoclaw_memory"
+  llm:
+    provider: "openai"
+    model: "claude-3-5-sonnet-20241022"
+    base_url: "http://127.0.0.1:4000/v1"
+    api_key: "sk-litellm-proxy"
+    temperature: 0.1
+    max_tokens: 4096
+  embedding:
+    provider: "openai"
+    model: "nomic-embed-text-v2"
+    base_url: "http://127.0.0.1:8081/v1"
+    api_key: "not-needed"
+    dim: 768
+
+# 3. Asynchronous Resilient Pipeline
+pipeline:
+  queue_db_path: "./data/episodes.db"
+  worker_concurrency: 6
+  max_attempts: 3
+  attempt_timeout_sec: 120
+  cron_interval_min: 10
+  drain_batch_size: 50
+  dream:
+    enabled: true
+    hour: 2
+    minute: 30
+    force_clustering: false
+
+# 4. Schema Repair & Heuristics Registry
+heuristics:
+  auto_repair: true
+  active_rules:
+    - "edge_duplicate"
+    - "extracted_edges"
+    - "node_resolutions"
+  quirks_log_path: "./data/logs/llm_schema_quirks.jsonl"
+  metrics_enabled: true
+
+# 5. Embedding & Semantic Cache
+cache:
+  embed:
+    enabled: true
+    max_size: 10000
+    eviction: "lru"
+    stats_interval_sec: 300
+
+# 6. Multi-Channel Health & Audit Reporting
+report:
+  min_severity: "info"
+  sinks:
+    file:
+      enabled: true
+      path: "./data/logs/janus_report.jsonl"
+      rotation_max_bytes: 10485760  # 10 MB
+      backup_count: 5
+    cli:
+      enabled: true
+      format: "pretty"  # "pretty" | "json" | "summary"
+      min_severity: "warning"
+    telegram:
+      enabled: false
+      bot_token: ""
+      chat_id: ""
+      rate_limit_per_min: 10
+    webhook:
+      enabled: false
+      url: ""
+      secret_header: "X-Janus-Signature"
+      secret_token: ""
+      timeout_sec: 5

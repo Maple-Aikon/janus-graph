@@ -1,0 +1,60 @@
+name: Janus-Graph CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-test:
+    name: Lint & Test (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv pip install -e ".[dev,cli]"
+
+      - name: Run Ruff Lint & Format Check
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Run Pytest Suite
+        run: |
+          uv run pytest -v
+
+  build-cross-arch:
+    name: FalkorDB Cross-Arch Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            arch: x86_64
+          - os: ubuntu-22.04-arm
+            arch: arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify build script
+        run: |
+          chmod +x bin/build.sh
+          ./bin/build.sh ${{ matrix.arch }}
