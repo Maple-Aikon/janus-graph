@@ -23,3 +23,12 @@ class ReportEvent:
     summary: str
     details: Dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "severity": self.severity.value,
+            "summary": self.summary,
+            "details": self.details,
+            "timestamp": self.timestamp,
+        }
