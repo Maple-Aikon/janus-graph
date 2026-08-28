@@ -1,42 +1,143 @@
-# Python & Virtual Environments
-.venv/
-venv/
-ENV/
-env/
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.pytest_cache/
-.coverage
-htmlcov/
-dist/
-build/
-*.egg-info/
+# ==============================================================================
+# Janus-Graph .gitignore
+# ==============================================================================
 
-# Janus-Graph Runtime Data & Logs
+# ------------------------------------------------------------------------------
+# 1. Environment & Configuration (Secrets, Local Configs)
+# ------------------------------------------------------------------------------
+.env
+.env.*
+.env.local
+!.env.example
+config.yaml
+config.yml
+config.json
+config.toml
+*.local.yaml
+*.local.yml
+*.local.json
+*.local.toml
+!config.example.yaml
+!config.example.yml
+!config.example.json
+!config.example.toml
+secrets/
+*.secret
+*.pem
+*.key
+credentials/
+credentials*.json
+
+# ------------------------------------------------------------------------------
+# 2. Personal & Runtime Heuristic Patterns / Custom Dumps
+# ------------------------------------------------------------------------------
+# Note: Keep package source janus_graph/heuristics/ tracked
+*.pattern
+*.patterns
+*.heuristics.json
+*.patterns.json
+heuristics.local.*
+patterns.local.*
+data/heuristics/*
+!data/heuristics/.gitkeep
+data/patterns/*
+!data/patterns/.gitkeep
+user_data/
+prompts/personal/
+
+# ------------------------------------------------------------------------------
+# 3. Databases, State & Storage
+# ------------------------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.db-journal
+*.rdb
+state/
 data/*
 !data/.gitkeep
 !data/falkordb/.gitkeep
 !data/logs/.gitkeep
 !data/checkpoints/.gitkeep
-*.db
-*.db-shm
-*.db-wal
-*.rdb
-*.pid
-*.log
+!data/heuristics/.gitkeep
+!data/patterns/.gitkeep
 
-# IDE & OS
+# ------------------------------------------------------------------------------
+# 4. Logs, Sockets & Process IDs
+# ------------------------------------------------------------------------------
+*.log
+*.log.*
+logs/
+*.pid
+*.sock
+*.pid.lock
+
+# ------------------------------------------------------------------------------
+# 5. Python & Environment Caches
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Test, Lint & Coverage Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+tmp/
+.tmp/
+
+# ------------------------------------------------------------------------------
+# 6. IDE & OS Artifacts
+# ------------------------------------------------------------------------------
 .vscode/
 .idea/
-.DS_Store
 *.swp
+*.swo
 *~
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-# Binaries
+# ------------------------------------------------------------------------------
+# 7. Precompiled & Downloaded Binaries (Engine artifacts)
+# ------------------------------------------------------------------------------
 bin/*.so
 bin/*.so.*
 bin/redis-server*
 bin/valkey-server*
 bin/*.deb
+bin/*.tar.gz
+bin/*.zip
