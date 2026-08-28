@@ -86,6 +86,8 @@ class EpisodeRecord:
     consecutive_failures: int = 0
     last_error: Optional[str] = None
     checkpoint: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
     @property
     def content(self) -> str:
@@ -417,6 +419,40 @@ class EpisodeQueue:
 
         async with self._write_lock:
             return await asyncio.to_thread(_sync_replay)
+
+    def get_record(self, episode_id: str) -> Optional[EpisodeRecord]:
+        """Fetch a single episode record by ID."""
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                """
+                SELECT id, payload_json, status, enqueued_at, started_at, finished_at,
+                       attempt_count, consecutive_failures, last_error, checkpoint, created_at, updated_at
+                FROM episodes
+                WHERE id = ?
+                """,
+                (episode_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            try:
+                payload = json.loads(row["payload_json"])
+            except Exception:
+                payload = {}
+            return EpisodeRecord(
+                id=row["id"],
+                payload=payload,
+                status=row["status"],
+                enqueued_at=row["enqueued_at"],
+                started_at=row["started_at"],
+                finished_at=row["finished_at"],
+                attempt_count=row["attempt_count"],
+                consecutive_failures=row["consecutive_failures"],
+                last_error=row["last_error"],
+                checkpoint=row["checkpoint"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
 
     def get_stats(self) -> Dict[str, int]:
         """Return synchronous aggregate count of statuses."""

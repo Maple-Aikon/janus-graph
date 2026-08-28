@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Type
@@ -181,12 +182,18 @@ class JanusSettings(BaseSettings):
 
 
 def load_config(config_path: Optional[str | Path] = None) -> JanusSettings:
-    """Load settings with fallback to YAML file and environment variable overrides."""
+    """Load settings with fallback to YAML/JSON file and environment variable overrides."""
     if config_path is not None:
         p = Path(config_path)
         if p.exists():
-            with open(p, "r", encoding="utf-8") as f:
-                loaded = yaml.safe_load(f)
-                if isinstance(loaded, dict):
-                    return JanusSettings(**loaded)
+            if p.suffix in (".yaml", ".yml"):
+                with open(p, "r", encoding="utf-8") as f:
+                    loaded = yaml.safe_load(f)
+                    if isinstance(loaded, dict):
+                        return JanusSettings(**loaded)
+            elif p.suffix == ".json":
+                from .migrate import convert_legacy_dict
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return JanusSettings(**convert_legacy_dict(data))
     return JanusSettings()
