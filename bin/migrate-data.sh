@@ -2,9 +2,9 @@
 # Safely migrate legacy queue and checkpoints into Janus-Graph data directory
 set -euo pipefail
 
-LEGACY_DIR="${1:-/home/maple/.picoclaw/workspace/apps/graphiti-mcp/queue}"
-TARGET_DIR="${2:-/home/maple/.picoclaw/workspace/sources/janus-graph/data}"
-BACKUP_BASE="${3:-/home/maple/.picoclaw/workspace/state/migration}"
+LEGACY_DIR="${1:?Usage: $0 <legacy_queue_dir> [target_data_dir] [backup_base_dir]}"
+TARGET_DIR="${2:-./data}"
+BACKUP_BASE="${3:-./data/backups/migration}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

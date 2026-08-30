@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SNAPSHOT_DIR="${1:?Usage: $0 <snapshot_dir> [target_data_dir]}"
-TARGET_DATA_DIR="${2:-/home/maple/.picoclaw/workspace/sources/janus-graph/data}"
+TARGET_DATA_DIR="${2:-./data}"
 
 if [[ ! -d "$SNAPSHOT_DIR" ]]; then
     echo "Error: Snapshot directory not found: $SNAPSHOT_DIR" >&2

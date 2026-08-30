@@ -9,8 +9,8 @@ OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 echo "==> Detecting host environment: ${OS} (${ARCH})"
 
 copy_from_local_if_available() {
-    local legacy_bin="/home/maple/.picoclaw/workspace/apps/falkordb-server/bin"
-    if [[ -d "$legacy_bin" ]]; then
+    local legacy_bin="${LEGACY_BIN_DIR:-}"
+    if [[ -n "$legacy_bin" && -d "$legacy_bin" ]]; then
         if [[ ! -f "$BIN_DIR/falkordb.so" && -f "$legacy_bin/falkordb.so" ]]; then
             echo "==> Copying pre-built falkordb.so from local cache..."
             cp "$legacy_bin/falkordb.so" "$BIN_DIR/falkordb.so"

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 TARGET_BASE="${1:?Usage: $0 <target_dir> [source_db_path]}"
-SOURCE_DB="${2:-/home/maple/.picoclaw/workspace/apps/graphiti-mcp/queue/episodes.db}"
+SOURCE_DB="${2:-./data/episodes.db}"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 TARGET_DIR="${TARGET_BASE}/snapshot_${TIMESTAMP}"
 LATEST_DIR="${TARGET_BASE}/latest"

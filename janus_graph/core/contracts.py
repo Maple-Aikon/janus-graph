@@ -47,7 +47,7 @@ class PipelineSettings:
 @dataclass(frozen=True)
 class CliReportSettings:
     pipe_config_path: Path = Path("./data/pipe.conf")
-    pipe_user: str = "maple"
+    pipe_user: str = "janus"
     pipe_subprocess_method: str = "sudo"  # "sudo" only in v1.0
     pipe_sudo_args: tuple[str, ...] = ("-n",)
     pipe_timeout_sec: int = 10
