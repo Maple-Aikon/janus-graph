@@ -63,6 +63,7 @@ data/*
 !data/checkpoints/.gitkeep
 !data/heuristics/.gitkeep
 !data/patterns/.gitkeep
+backups/
 
 # ------------------------------------------------------------------------------
 # 4. Logs, Sockets & Process IDs
