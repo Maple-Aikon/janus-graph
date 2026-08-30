@@ -1,7 +1,7 @@
 """Tests for Pipeline Worker, Cron Sweeper, and Dream Mode Consolidation."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from pathlib import Path
 import pytest
 
@@ -47,6 +47,7 @@ async def test_worker_process_success(temp_queue):
             name=f"ep_{ep_id[:8]}",
             episode_body="Some memory fact",
             source_description="agent_interaction",
+            reference_time=ANY,
             group_id="custom_grp",
         )
 
