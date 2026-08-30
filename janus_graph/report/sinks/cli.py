@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from typing import Optional
 from ..models import ReportEvent
 from . import BaseSink
 
 ALLOWED_SUBPROCESS_METHODS = ("sudo",)
+ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
 
 class CLISink(BaseSink):
@@ -27,12 +29,24 @@ class CLISink(BaseSink):
     def name(self) -> str:
         return "cli"
 
-    async def emit(self, event: ReportEvent) -> None:
-        out_stream = sys.stderr if event.severity.value in ("error", "critical") else sys.stdout
+    def _strip_ansi(self, text: str) -> str:
+        """Strip ANSI escape sequences from formatted text."""
+        return ANSI_RE.sub("", text)
+
+    def render(self, event: ReportEvent) -> str:
+        """Render event to clean plain text string (without ANSI) suitable for piping."""
         if self.format_type == "json":
             msg = json.dumps(event.to_dict())
         elif self.format_type == "raw":
             msg = f"{event.timestamp} [{event.severity.value}] {event.summary}"
+        elif self.format_type == "summary":
+            msg = f"[{event.severity.value.upper()}] {event.kind}: {event.summary}"
         else:  # pretty
             msg = f"[{event.severity.value.upper():8s}] [{event.kind:15s}] {event.summary}"
+        return self._strip_ansi(msg)
+
+    async def emit(self, event: ReportEvent) -> None:
+        out_stream = sys.stderr if event.severity.value in ("error", "critical") else sys.stdout
+        msg = self.render(event)
         print(msg, file=out_stream, flush=True)
+

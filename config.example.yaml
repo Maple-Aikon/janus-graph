@@ -35,11 +35,9 @@ pipeline:
   max_attempts: 3
   attempt_timeout_sec: 120
   cron_interval_min: 10
-  drain_batch_size: 50
+  drain_batch_size: 20
   dream:
     enabled: true
-    hour: 2
-    minute: 30
     force_clustering: false
 
 # 4. Schema Repair & Heuristics Registry

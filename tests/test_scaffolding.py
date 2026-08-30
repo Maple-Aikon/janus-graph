@@ -24,3 +24,16 @@ def test_config_env_override(monkeypatch):
     cfg = load_config()
     assert cfg.engine.port == 6380
     assert cfg.pipeline.worker_concurrency == 12
+
+
+def test_create_graphiti_instance_structure():
+    from janus_graph.core.instance import create_graphiti_instance
+    from graphiti_core import Graphiti
+    from janus_graph.heuristics.repairing_client import SchemaRepairingLLMClient
+    from janus_graph.cache.embed_cache import EmbedCache
+
+    cfg = load_config()
+    inst = create_graphiti_instance(cfg)
+    assert isinstance(inst, Graphiti)
+    assert isinstance(inst.llm_client, SchemaRepairingLLMClient)
+    assert isinstance(inst.embedder, EmbedCache)

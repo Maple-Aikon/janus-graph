@@ -57,6 +57,23 @@ async def test_cli_sink():
     event = ReportEvent(kind="cli_test", severity=ReportSeverity.INFO, summary="Console message")
     await sink.emit(event)
 
+    # Test render methods
+    rendered_pretty = sink.render(event)
+    assert "cli_test" in rendered_pretty
+    assert "Console message" in rendered_pretty
+
+    summary_sink = CLISink(format_type="summary")
+    rendered_summary = summary_sink.render(event)
+    assert rendered_summary == "[INFO] cli_test: Console message"
+
+    json_sink = CLISink(format_type="json")
+    rendered_json = json_sink.render(event)
+    assert json.loads(rendered_json)["summary"] == "Console message"
+
+    # Test strip ansi
+    ansi_text = "\033[32mColored\033[0m Text"
+    assert sink._strip_ansi(ansi_text) == "Colored Text"
+
     # Invalid method should raise
     with pytest.raises(ValueError):
         CLISink(subprocess_method="invalid_method")

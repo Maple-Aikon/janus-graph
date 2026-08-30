@@ -28,13 +28,18 @@ PER_RECORD_TIMEOUT_SECONDS = float(os.environ.get("GRAPHITI_PER_RECORD_TIMEOUT",
 
 async def run_cron_sweep(
     settings: Optional[Union[JanusSettings, Settings]] = None,
-    batch_size: int = SWEEP_LIMIT,
+    batch_size: Optional[int] = None,
     concurrency: int = WORKER_CONCURRENCY,
     sweep_timeout_sec: float = SWEEP_TIMEOUT_SECONDS,
     record_timeout_sec: float = PER_RECORD_TIMEOUT_SECONDS,
 ) -> Dict[str, Any]:
     """Execute a full reaper + worker sweep over pending queue records."""
     cfg = settings or load_config()
+    actual_batch_size = (
+        batch_size
+        if (batch_size is not None and batch_size > 0)
+        else (getattr(cfg.pipeline, "drain_batch_size", None) or SWEEP_LIMIT)
+    )
     db_path = (
         cfg.pipeline.queue_db_path
         if hasattr(cfg.pipeline, "queue_db_path")
@@ -53,7 +58,7 @@ async def run_cron_sweep(
         logger.info("Reaped %d stuck processing records.", reaped_count)
 
     # Phase 2: Claim batch of queued records
-    records = await queue.claim_next_batch(limit=batch_size)
+    records = await queue.claim_next_batch(limit=actual_batch_size)
     processed_count = len(records)
     succeeded_count = 0
     failed_count = 0

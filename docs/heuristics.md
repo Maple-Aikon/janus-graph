@@ -23,7 +23,7 @@ Without mitigation, these payload discrepancies trigger Pydantic `ValidationErro
 |   2. Attempts Pydantic schema validation: response_model(**response)        |
 |   3. If ValidationError:                                                    |
 |      ├── Extracts raw input payload from err.errors()[i]["input"]           |
-|      ├── Dispatches payload to RuleRegistry matching schema signature       |
+|      ├── Dispatches payload to HeuristicRegistry matching schema signature       |
 |      ├── Applies deterministic transformations in-memory                    |
 |      ├── Logs anomaly signature to QuirksLogger (JSONL)                     |
 |      └── Re-validates repaired payload and returns clean instance           |
@@ -34,7 +34,7 @@ Without mitigation, these payload discrepancies trigger Pydantic `ValidationErro
 
 ## Built-in Repair Rules
 
-All rules inherit from `ISchemaRepairRule` (`janus_graph.heuristics.rules.base.BaseRepairRule`):
+All rules inherit from `HeuristicRule` (`janus_graph.heuristics.rules.base.HeuristicRule`), registered into a `HeuristicRegistry` instance (`janus_graph.heuristics.registry.HeuristicRegistry`):
 
 ### 1. `EdgeDuplicateRule` (`rules/edge_duplicate.py`)
 - **Target Schema**: `EdgeDuplicate`
@@ -67,22 +67,30 @@ All rules inherit from `ISchemaRepairRule` (`janus_graph.heuristics.rules.base.B
 
 ## Authoring Custom Repair Rules
 
-You can implement custom repair rules by subclassing `BaseRepairRule` and registering it with the global `RuleRegistry`:
+You can implement custom repair rules by subclassing `HeuristicRule` and registering them with a `HeuristicRegistry` instance:
 
 ```python
 from typing import Any, Dict
-from janus_graph.heuristics.rules.base import BaseRepairRule
-from janus_graph.heuristics.registry import default_registry
+from janus_graph.heuristics.rules.base import HeuristicRule
+from janus_graph.heuristics.registry import HeuristicRegistry
 
-class CustomMemoryRule(BaseRepairRule):
-    name = "custom_memory_repair"
-    schema_name = "CustomSchema"
-    priority = 50  # Lower number = higher priority
+class CustomMemoryRule(HeuristicRule):
+    @property
+    def name(self) -> str:
+        return "custom_memory_repair"
 
-    def can_handle(self, schema_name: str, payload: Dict[str, Any]) -> bool:
-        return schema_name == self.schema_name or "custom_field" in payload
+    @property
+    def target_model(self) -> str:
+        return "CustomSchema"
 
-    def repair(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    @property
+    def priority(self) -> int:
+        return 50  # Lower number = higher priority
+
+    def can_repair(self, schema_name: str, payload: Dict[str, Any], error: Any = None) -> bool:
+        return schema_name == self.target_model or "custom_field" in payload
+
+    def repair(self, schema_name: str, payload: Dict[str, Any], error: Any = None) -> Dict[str, Any]:
         repaired = dict(payload)
         if "tags" not in repaired or repaired["tags"] is None:
             repaired["tags"] = []
@@ -90,8 +98,9 @@ class CustomMemoryRule(BaseRepairRule):
             repaired["tags"] = [t.strip() for t in repaired["tags"].split(",")]
         return repaired
 
-# Register the rule dynamically
-default_registry.register(CustomMemoryRule())
+# Register the rule via an instantiated registry
+registry = HeuristicRegistry(active_rules=["custom_memory_repair"])
+registry.register(CustomMemoryRule())
 ```
 
 ---

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 from typing import Any, Optional, Union
@@ -50,7 +51,7 @@ class EpisodeWorker:
 
         payload = record.payload
         content = payload.get("content", "")
-        group_id = payload.get("group_id") or "graphiti"
+        group_id = payload.get("group_id") or self.settings.graphiti.group_id
         name = payload.get("name") or f"ep_{record.id[:8]}"
         source_desc = payload.get("source_description", "agent_interaction")
 
@@ -61,10 +62,19 @@ class EpisodeWorker:
 
         await self.queue.update_checkpoint(record.id, "ingesting")
         client = create_graphiti_instance(self.settings)
+
+        ref_time = datetime.now(timezone.utc)
+        if record.created_at:
+            try:
+                ref_time = datetime.fromisoformat(record.created_at)
+            except Exception:
+                pass
+
         await client.add_episode(
             name=name,
             episode_body=content,
             source_description=source_desc,
+            reference_time=ref_time,
             group_id=group_id,
         )
         await self.queue.mark_done(record.id)

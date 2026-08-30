@@ -57,8 +57,6 @@ class GraphitiConfig(BaseModel):
 class DreamConfig(BaseModel):
     """Dream mode memory consolidation settings."""
     enabled: bool = True
-    hour: int = 2
-    minute: int = 30
     force_clustering: bool = False
 
 
@@ -190,6 +188,9 @@ def load_config(config_path: Optional[str | Path] = None) -> JanusSettings:
                 with open(p, "r", encoding="utf-8") as f:
                     loaded = yaml.safe_load(f)
                     if isinstance(loaded, dict):
+                        if "graphiti" not in loaded and ("llm" in loaded or "server" in loaded or "database" in loaded):
+                            from .migrate import convert_legacy_dict
+                            return JanusSettings(**convert_legacy_dict(loaded))
                         return JanusSettings(**loaded)
             elif p.suffix == ".json":
                 from .migrate import convert_legacy_dict

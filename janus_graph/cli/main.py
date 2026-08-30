@@ -169,13 +169,15 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
     elif cmd == "sweep":
         print("🔄 Starting cron sweep...")
         res = asyncio.run(run_cron_sweep(cfg, batch_size=args.batch_size))
-        print(f"Sweep completed: {res}")
+        summary_text = f"Sweep completed: {res.get('succeeded', 0)}/{res.get('processed', 0)} ok, {res.get('failed', 0)} fail, {res.get('queued_remaining', 0)} left ({res.get('duration_ms', 0)}ms)"
+        print(summary_text)
         return 0
 
     elif cmd == "dream":
         print(f"🌙 Starting dream consolidation (force={args.force})...")
         res = asyncio.run(run_dream_consolidation(cfg, force=args.force, group_id=args.group_id))
-        print(f"Dream consolidation completed: {res}")
+        summary_text = f"Dream consolidation completed: {res.get('status', 'ok')} ({res.get('duration_ms', 0)}ms)"
+        print(summary_text)
         return 0
 
     elif cmd == "queue":

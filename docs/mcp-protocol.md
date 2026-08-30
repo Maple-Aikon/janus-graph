@@ -65,23 +65,7 @@ Return a composite health snapshot of FalkorDB, SQLite WAL queue, embeddings, an
 
 ## Client Integration Configuration
 
-### 1. PicoClaw Configuration (`config.json`)
-
-```json
-{
-  "mcpServers": {
-    "janus-graph": {
-      "command": "/home/maple/.picoclaw/workspace/sources/janus-graph/.venv/bin/janus-graph",
-      "args": ["mcp"],
-      "env": {
-        "JANUS_CONFIG_PATH": "/home/maple/.picoclaw/workspace/sources/janus-graph/config.yaml"
-      }
-    }
-  }
-}
-```
-
-### 2. Claude Desktop Configuration (`claude_desktop_config.json`)
+### Claude Desktop Configuration (`claude_desktop_config.json`)
 
 ```json
 {

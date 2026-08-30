@@ -162,8 +162,9 @@ class EpisodeQueue:
             await asyncio.to_thread(_sync_insert)
         return ep_id
 
-    async def claim_next_batch(self, limit: int = 20) -> List[EpisodeRecord]:
+    async def claim_next_batch(self, limit: Optional[int] = 20) -> List[EpisodeRecord]:
         """Atomically claim next batch of queued episodes and set status to processing."""
+        limit_val = limit if (limit is not None and limit > 0) else 20
         now = _iso_now()
 
         def _sync_claim():
@@ -178,7 +179,7 @@ class EpisodeQueue:
                     ORDER BY enqueued_at ASC
                     LIMIT ?
                     """,
-                    (limit,),
+                    (limit_val,),
                 )
                 rows = cursor.fetchall()
                 if not rows:
