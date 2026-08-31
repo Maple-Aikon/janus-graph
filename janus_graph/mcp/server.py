@@ -60,10 +60,15 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
         content: str,
         name: Optional[str] = None,
         source_description: Optional[str] = "user_conversation",
-        group_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Enqueue a new text episode into the Janus Knowledge Graph queue."""
-        target_group = group_id or cfg.graphiti.group_id
+        """Enqueue a new text episode into the Janus Knowledge Graph queue.
+
+        Note: ``group_id`` is locked at the canonical ``cfg.graphiti.group_id``.
+        It is not exposed as a tool parameter because PicoClaw's MCP tools must
+        share a single memory tenant (graphiti_memory). Edit ``config.yaml`` /
+        ``JANUS_GRAPHITI__GROUP_ID`` env to change.
+        """
+        target_group = cfg.graphiti.group_id
         ep_name = name or f"Episode {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}"
 
         ep_id = await queue.enqueue(
@@ -155,11 +160,14 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
     @mcp.tool()
     async def search_memory(
         query: str,
-        group_id: Optional[str] = None,
         limit: int = 5,
     ) -> Dict[str, Any]:
-        """Search the knowledge graph using hybrid semantic retrieval."""
-        target_group = group_id or cfg.graphiti.group_id
+        """Search the knowledge graph using hybrid semantic retrieval.
+
+        Note: ``group_id`` is locked at the canonical ``cfg.graphiti.group_id``.
+        Not exposed as a parameter to prevent cross-tenant memory mixing.
+        """
+        target_group = cfg.graphiti.group_id
         try:
             graphiti = get_graphiti()
             results = await graphiti.search(
@@ -192,9 +200,13 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
             }
 
     @mcp.tool()
-    async def get_entity(entity_name: str, group_id: Optional[str] = None) -> Dict[str, Any]:
-        """Retrieve an entity and its direct relationships."""
-        target_group = group_id or cfg.graphiti.group_id
+    async def get_entity(entity_name: str) -> Dict[str, Any]:
+        """Retrieve an entity and its direct relationships.
+
+        Note: ``group_id`` is locked at the canonical ``cfg.graphiti.group_id``.
+        Not exposed as a parameter to prevent cross-tenant memory mixing.
+        """
+        target_group = cfg.graphiti.group_id
         try:
             fdb = get_falkordb_client()
             g = fdb.select_graph(target_group)
@@ -226,9 +238,13 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
             }
 
     @mcp.tool()
-    async def list_entities(limit: int = 50, filter_query: Optional[str] = None, group_id: Optional[str] = None) -> Dict[str, Any]:
-        """List entities stored in the knowledge graph with relationship counts."""
-        target_group = group_id or cfg.graphiti.group_id
+    async def list_entities(limit: int = 50, filter_query: Optional[str] = None) -> Dict[str, Any]:
+        """List entities stored in the knowledge graph with relationship counts.
+
+        Note: ``group_id`` is locked at the canonical ``cfg.graphiti.group_id``.
+        Not exposed as a parameter to prevent cross-tenant memory mixing.
+        """
+        target_group = cfg.graphiti.group_id
         try:
             fdb = get_falkordb_client()
             g = fdb.select_graph(target_group)
@@ -265,8 +281,12 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
             }
 
     @mcp.tool()
-    async def cypher_query(query: str, group_id: Optional[str] = None) -> Dict[str, Any]:
-        """Execute a read-only openCypher query directly against FalkorDB."""
+    async def cypher_query(query: str) -> Dict[str, Any]:
+        """Execute a read-only openCypher query directly against FalkorDB.
+
+        Note: ``group_id`` is locked at the canonical ``cfg.graphiti.group_id``.
+        Not exposed as a parameter to prevent cross-tenant memory mixing.
+        """
         is_ro, blocked_kw = is_read_only_cypher(query)
         if not is_ro:
             return {
@@ -275,7 +295,7 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
                 "blocked_keyword": blocked_kw,
             }
 
-        target_group = group_id or cfg.graphiti.group_id
+        target_group = cfg.graphiti.group_id
         try:
             fdb = get_falkordb_client()
             g = fdb.select_graph(target_group)
@@ -297,9 +317,13 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
             }
 
     @mcp.tool()
-    async def run_dream_maintenance(force: bool = False, group_id: Optional[str] = None) -> Dict[str, Any]:
-        """Execute Graphiti Dream Mode memory consolidation cycle (Phases 1-4)."""
-        res = await run_dream_consolidation(cfg, force=force, group_id=group_id)
+    async def run_dream_maintenance(force: bool = False) -> Dict[str, Any]:
+        """Execute Graphiti Dream Mode memory consolidation cycle (Phases 1-4).
+
+        Note: ``group_id`` is locked at the canonical ``cfg.graphiti.group_id``.
+        Not exposed as a parameter to prevent cross-tenant memory mixing.
+        """
+        res = await run_dream_consolidation(cfg, force=force)
         return {
             "success": True,
             "report": res,

@@ -49,7 +49,7 @@ class EmbeddingConfig(BaseModel):
 
 class GraphitiConfig(BaseModel):
     """Graphiti memory configuration."""
-    group_id: str = "picoclaw_memory"
+    group_id: str = "graphiti_memory"
     llm: LLMConfig = Field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 
