@@ -307,7 +307,7 @@ class EpisodeQueue:
         async with self._write_lock:
             await asyncio.to_thread(_sync_checkpoint)
 
-    async def reap_stuck_processing(self, timeout_sec: int = 300, max_attempts: int = 3) -> int:
+    async def reap_stuck_processing(self, timeout_sec: int = 900, max_attempts: int = 3) -> int:
         """Find processing records older than timeout and requeue or abort."""
         now = _iso_now()
 

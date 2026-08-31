@@ -16,8 +16,9 @@ ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 class CLISink(BaseSink):
     """Outputs events to console or pipes to administrative sink."""
 
-    def __init__(self, format_type: str = "pretty", subprocess_method: str = "sudo"):
+    def __init__(self, format_type: str = "pretty", subprocess_method: str = "sudo", min_severity: str = "info"):
         self.format_type = format_type
+        self.min_severity = min_severity
         if subprocess_method not in ALLOWED_SUBPROCESS_METHODS:
             raise ValueError(
                 f"pipe_subprocess_method='{subprocess_method}' not allowed. "
@@ -46,6 +47,8 @@ class CLISink(BaseSink):
         return self._strip_ansi(msg)
 
     async def emit(self, event: ReportEvent) -> None:
+        if not event.severity.is_at_least(self.min_severity):
+            return
         out_stream = sys.stderr if event.severity.value in ("error", "critical") else sys.stdout
         msg = self.render(event)
         print(msg, file=out_stream, flush=True)

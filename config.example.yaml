@@ -31,9 +31,9 @@ graphiti:
 # 3. Asynchronous Resilient Pipeline
 pipeline:
   queue_db_path: "./data/episodes.db"
-  worker_concurrency: 6
+  worker_concurrency: 2
   max_attempts: 3
-  attempt_timeout_sec: 120
+  attempt_timeout_sec: 900
   cron_interval_min: 10
   drain_batch_size: 20
   dream:
@@ -60,7 +60,7 @@ cache:
 
 # 6. Multi-Channel Health & Audit Reporting
 report:
-  min_severity: "info"
+  min_severity: "error"
   sinks:
     file:
       enabled: true
@@ -70,15 +70,17 @@ report:
     cli:
       enabled: true
       format: "pretty"  # "pretty" | "json" | "summary"
-      min_severity: "warning"
+      min_severity: "error"
     telegram:
       enabled: false
       bot_token: ""
       chat_id: ""
       rate_limit_per_min: 10
+      min_severity: "error"
     webhook:
       enabled: false
       url: ""
       secret_header: "X-Janus-Signature"
       secret_token: ""
       timeout_sec: 5
+      min_severity: "error"

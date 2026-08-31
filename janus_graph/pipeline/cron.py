@@ -18,12 +18,12 @@ from .worker import EpisodeWorker
 
 logger = logging.getLogger("janus_graph.pipeline.cron")
 
-PROCESSING_TIMEOUT_SECONDS = int(os.environ.get("GRAPHITI_PROCESSING_TIMEOUT", "300"))
-WORKER_CONCURRENCY = int(os.environ.get("GRAPHITI_WORKER_CONCURRENCY", "3"))
+PROCESSING_TIMEOUT_SECONDS = int(os.environ.get("GRAPHITI_PROCESSING_TIMEOUT", "900"))
+WORKER_CONCURRENCY = int(os.environ.get("GRAPHITI_WORKER_CONCURRENCY", "2"))
 SWEEP_LIMIT = int(os.environ.get("GRAPHITI_SWEEP_LIMIT", "6"))
 REAPER_LIMIT = int(os.environ.get("GRAPHITI_REAPER_LIMIT", "500"))
-SWEEP_TIMEOUT_SECONDS = float(os.environ.get("GRAPHITI_SWEEP_TIMEOUT", "420.0"))
-PER_RECORD_TIMEOUT_SECONDS = float(os.environ.get("GRAPHITI_PER_RECORD_TIMEOUT", "300.0"))
+SWEEP_TIMEOUT_SECONDS = float(os.environ.get("GRAPHITI_SWEEP_TIMEOUT", "900.0"))
+PER_RECORD_TIMEOUT_SECONDS = float(os.environ.get("GRAPHITI_PER_RECORD_TIMEOUT", "900.0"))
 
 
 async def run_cron_sweep(
@@ -40,6 +40,26 @@ async def run_cron_sweep(
         if (batch_size is not None and batch_size > 0)
         else (getattr(cfg.pipeline, "drain_batch_size", None) or SWEEP_LIMIT)
     )
+    actual_concurrency = (
+        getattr(cfg.pipeline, "worker_concurrency", None)
+        if concurrency == WORKER_CONCURRENCY
+        else concurrency
+    ) or WORKER_CONCURRENCY
+    actual_record_timeout = (
+        float(getattr(cfg.pipeline, "attempt_timeout_sec", None))
+        if (record_timeout_sec == PER_RECORD_TIMEOUT_SECONDS and hasattr(cfg.pipeline, "attempt_timeout_sec"))
+        else record_timeout_sec
+    )
+    actual_sweep_timeout = (
+        float(getattr(cfg.pipeline, "attempt_timeout_sec", None))
+        if (sweep_timeout_sec == SWEEP_TIMEOUT_SECONDS and hasattr(cfg.pipeline, "attempt_timeout_sec"))
+        else sweep_timeout_sec
+    )
+    actual_reap_timeout = (
+        int(getattr(cfg.pipeline, "attempt_timeout_sec", None))
+        if hasattr(cfg.pipeline, "attempt_timeout_sec")
+        else PROCESSING_TIMEOUT_SECONDS
+    )
     db_path = (
         cfg.pipeline.queue_db_path
         if hasattr(cfg.pipeline, "queue_db_path")
@@ -53,7 +73,7 @@ async def run_cron_sweep(
     stats_initial = queue.get_stats()
 
     # Phase 1: Reaper-first (unlock stuck processing rows)
-    reaped_count = await queue.reap_stuck_processing(timeout_sec=PROCESSING_TIMEOUT_SECONDS)
+    reaped_count = await queue.reap_stuck_processing(timeout_sec=actual_reap_timeout)
     if reaped_count > 0:
         logger.info("Reaped %d stuck processing records.", reaped_count)
 
@@ -64,20 +84,20 @@ async def run_cron_sweep(
     failed_count = 0
 
     if records:
-        logger.info("Claimed %d records for processing (concurrency=%d)", processed_count, concurrency)
-        sem = asyncio.Semaphore(concurrency)
+        logger.info("Claimed %d records for processing (concurrency=%d)", processed_count, actual_concurrency)
+        sem = asyncio.Semaphore(actual_concurrency)
 
         async def _safe_process(rec: EpisodeRecord):
             nonlocal succeeded_count, failed_count
             # Check soft sweep deadline
-            if time.monotonic() - start_time > sweep_timeout_sec:
+            if time.monotonic() - start_time > actual_sweep_timeout:
                 logger.warning("Sweep soft timeout reached; deferring record %s", rec.id)
                 await queue.mark_failed(rec.id, "Sweep soft timeout exceeded")
                 failed_count += 1
                 return
 
             async with sem:
-                ok = await worker.process_record(rec, timeout_sec=record_timeout_sec)
+                ok = await worker.process_record(rec, timeout_sec=actual_record_timeout)
                 if ok:
                     succeeded_count += 1
                 else:

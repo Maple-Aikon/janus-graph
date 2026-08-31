@@ -23,10 +23,12 @@ class TelegramSink(BaseSink):
         bot_token: Optional[str] = None,
         chat_id: Optional[str] = None,
         backend: Optional[str] = None,
+        min_severity: str = "info",
     ):
         self.bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
         self.chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID")
         self.backend = backend or os.environ.get("TELEGRAM_BACKEND", "api" if self.bot_token else "log")
+        self.min_severity = min_severity
 
     @property
     def name(self) -> str:
@@ -50,6 +52,8 @@ class TelegramSink(BaseSink):
         return "\n".join(lines)
 
     async def emit(self, event: ReportEvent) -> None:
+        if not event.severity.is_at_least(self.min_severity):
+            return
         if self.backend == "log" or not self.bot_token or not self.chat_id:
             logger.info("TelegramSink [log-mode]: %s (%s)", event.summary, event.kind)
             return

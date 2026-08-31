@@ -25,11 +25,13 @@ class WebhookSink(BaseSink):
         secret_token: Optional[str] = None,
         secret_header: str = "X-Janus-Signature",
         timeout_sec: float = 10.0,
+        min_severity: str = "info",
     ):
         self.url = url or os.environ.get("WEBHOOK_URL")
         self.secret_token = secret_token or os.environ.get("WEBHOOK_SECRET")
         self.secret_header = secret_header
         self.timeout_sec = timeout_sec
+        self.min_severity = min_severity
 
     @property
     def name(self) -> str:
@@ -41,7 +43,7 @@ class WebhookSink(BaseSink):
         return hmac.new(self.secret_token.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
 
     async def emit(self, event: ReportEvent) -> None:
-        if not self.url:
+        if not self.url or not event.severity.is_at_least(self.min_severity):
             return
 
         payload_bytes = json.dumps(event.to_dict(), default=str).encode("utf-8")

@@ -15,6 +15,29 @@ class ReportSeverity(str, Enum):
     ERROR = "error"
     CRITICAL = "critical"
 
+    @property
+    def level(self) -> int:
+        _levels = {
+            ReportSeverity.DEBUG: 10,
+            ReportSeverity.INFO: 20,
+            ReportSeverity.WARNING: 30,
+            ReportSeverity.ERROR: 40,
+            ReportSeverity.CRITICAL: 50,
+        }
+        return _levels.get(self, 20)
+
+    def is_at_least(self, min_severity: Any) -> bool:
+        if isinstance(min_severity, str):
+            try:
+                min_sev = ReportSeverity(min_severity.lower())
+            except ValueError:
+                return True
+        elif isinstance(min_severity, ReportSeverity):
+            min_sev = min_severity
+        else:
+            return True
+        return self.level >= min_sev.level
+
 
 @dataclass
 class ReportEvent:

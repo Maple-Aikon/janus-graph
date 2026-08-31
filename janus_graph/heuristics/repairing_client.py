@@ -106,7 +106,7 @@ class SchemaRepairingLLMClient(LLMClient):
             return response
         except ValidationError as err:
             schema_name = getattr(response_model, "__name__", str(response_model))
-            logger.warning("Schema validation error caught for %s: %s", schema_name, err)
+            logger.debug("Schema validation error caught for %s: %s", schema_name, err)
 
             # Prefer the offending payload from err.errors()[0]["input"] when present
             # (the same convention the heuristics pipeline relies on), falling back

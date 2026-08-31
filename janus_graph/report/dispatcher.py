@@ -38,12 +38,13 @@ class ReportDispatcher:
                     )
                 )
             if cfg.report.sinks.cli.enabled:
-                sinks.append(CLISink(format_type=cfg.report.sinks.cli.format))
+                sinks.append(CLISink(format_type=cfg.report.sinks.cli.format, min_severity=getattr(cfg.report.sinks.cli, "min_severity", cfg.report.min_severity)))
             if cfg.report.sinks.telegram.enabled:
                 sinks.append(
                     TelegramSink(
                         bot_token=cfg.report.sinks.telegram.bot_token,
                         chat_id=cfg.report.sinks.telegram.chat_id,
+                        min_severity=getattr(cfg.report.sinks.telegram, "min_severity", cfg.report.min_severity),
                     )
                 )
             if cfg.report.sinks.webhook.enabled:
@@ -52,6 +53,7 @@ class ReportDispatcher:
                         url=cfg.report.sinks.webhook.url,
                         secret_token=cfg.report.sinks.webhook.secret_token,
                         secret_header=cfg.report.sinks.webhook.secret_header,
+                        min_severity=getattr(cfg.report.sinks.webhook, "min_severity", cfg.report.min_severity),
                     )
                 )
         elif isinstance(cfg, Settings):
