@@ -84,3 +84,13 @@ report:
       secret_token: ""
       timeout_sec: 5
       min_severity: "error"
+
+# 7. Search & Rerank (graphiti-core SearchConfig overrides)
+# Pushed into MCP search_memory via janus_graph/mcp/server.py:181-189.
+# Precedence: env > config > default.
+#   env:    JANUS_SEARCH__SIM_MIN_SCORE / JANUS_SEARCH__MMR_LAMBDA
+#   config: this file (search.sim_min_score / search.mmr_lambda)
+#   builtin defaults: 0.6 / 0.5 (mirrors graphiti_core.search_utils:65-66)
+search:
+  sim_min_score: 0.6
+  mmr_lambda: 0.5

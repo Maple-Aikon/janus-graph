@@ -19,6 +19,15 @@ from ..pipeline.queue import EpisodeQueue
 from ..pipeline.dream import run_dream_consolidation
 from ..cache.embed_cache import EmbedCache
 
+# graphiti-core: import SearchConfig recipe + SearchFilters/DateFilter for
+# the MCP `search_memory` tool (v0.4.5: parity with hook Falkor path).
+#   EDGE_HYBRID_SEARCH_MMR  = bm25 + cosine fused, then MMR rerank (lambda=0.5).
+#   SearchFilters(invalid_at=IS NULL) filters out soft-deleted facts.
+# Both are wired into graphiti.search() below; graphiti-core cascades the
+# filters into the cypher WHERE clause (search_filters.py:180-209).
+from graphiti_core.search.search_config_recipes import EDGE_HYBRID_SEARCH_MMR
+from graphiti_core.search.search_filters import ComparisonOperator, DateFilter, SearchFilters
+
 logger = logging.getLogger("janus_graph.mcp")
 
 BLOCKED_CYPHER_KEYWORDS = [
@@ -162,18 +171,55 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
         query: str,
         limit: int = 5,
     ) -> Dict[str, Any]:
-        """Search the knowledge graph using hybrid semantic retrieval.
+        """Search the knowledge graph using hybrid semantic retrieval (MMR reranked).
 
-        Note: ``group_id`` is locked at the canonical ``cfg.graphiti.group_id``.
-        Not exposed as a parameter to prevent cross-tenant memory mixing.
+        v0.4.5: pipes SearchConfig=EDGE_HYBRID_SEARCH_MMR (BM25+cosine fused
+        then MMR reranked) and SearchFilters(invalid_at=IS NULL) into
+        graphiti.search(). This gives the MCP path parity with the hook
+        Falkor path so recall quality is consistent regardless of which path
+        wins the budget race.
+
+        v0.4.6: ``sim_min_score`` and ``mmr_lambda`` are read from
+        ``cfg.search`` (env ``JANUS_SEARCH__SIM_MIN_SCORE`` /
+        ``JANUS_SEARCH__MMR_LAMBDA`` → config.yaml ``search.*`` → built-in
+        defaults 0.6 / 0.5). The values are applied to every per-entity
+        search config (edge / node / episode / community) so MMR rerank
+        stays consistent across the parallel fan-out.
+
+        Note: ``group_id`` is locked to ``cfg.graphiti.group_id`` to keep
+        PicoClaw's MCP tools in a single memory tenant.
         """
         target_group = cfg.graphiti.group_id
         try:
             graphiti = get_graphiti()
+            # SearchConfig recipe is a module-level singleton; mutate locally
+            # so we don't bleed state across concurrent tool calls.
+            import copy
+            from janus_graph.config import resolve_search_params
+            search_config = copy.deepcopy(EDGE_HYBRID_SEARCH_MMR)
+            search_config.limit = limit
+            # v0.4.6: push cfg.search overrides (with fail-soft env validation)
+            # down to every per-entity config.
+            sim_min_score, mmr_lambda = resolve_search_params(cfg)
+            for sub_cfg in (
+                search_config.edge_config,
+                search_config.node_config,
+                search_config.episode_config,
+                search_config.community_config,
+            ):
+                if sub_cfg is None:
+                    continue
+                sub_cfg.sim_min_score = sim_min_score
+                sub_cfg.mmr_lambda = mmr_lambda
+            search_filter = SearchFilters(
+                invalid_at=[[DateFilter(comparison_operator=ComparisonOperator.is_null)]],
+            )
             results = await graphiti.search(
                 query=query,
                 group_ids=[target_group],
                 num_results=limit,
+                search_config=search_config,
+                search_filter=search_filter,
             )
             facts = []
             for edge in getattr(results, "edges", results) if isinstance(results, (list, tuple)) else getattr(results, "edges", []):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Type
@@ -14,6 +15,8 @@ from pydantic_settings import (
     SettingsConfigDict,
     YamlConfigSettingsSource,
 )
+
+logger = logging.getLogger("janus_graph.config")
 
 
 class EngineConfig(BaseModel):
@@ -135,6 +138,21 @@ class ReportConfig(BaseModel):
     sinks: ReportSinksConfig = Field(default_factory=ReportSinksConfig)
 
 
+class SearchConfig(BaseModel):
+    """Knowledge-graph search & rerank configuration.
+
+    These values are pushed into the graphiti-core SearchConfig (currently
+    EDGE_HYBRID_SEARCH_MMR via ``mcp.server.search_memory``).
+
+    Precedence (per JanusSettings):
+        1. environment variable  e.g. ``JANUS_SEARCH__SIM_MIN_SCORE=0.45``
+        2. YAML key              ``search.sim_min_score``
+        3. class default         see below
+    """
+    sim_min_score: float = 0.6  # mirrors graphiti_core DEFAULT_MIN_SCORE
+    mmr_lambda: float = 0.5     # mirrors graphiti_core DEFAULT_MMR_LAMBDA
+
+
 def _resolve_default_yaml_file() -> Optional[Path]:
     env_path = os.getenv("JANUS_CONFIG_PATH")
     if env_path and Path(env_path).exists():
@@ -154,6 +172,7 @@ class JanusSettings(BaseSettings):
     heuristics: HeuristicsConfig = Field(default_factory=HeuristicsConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
+    search: SearchConfig = Field(default_factory=SearchConfig)
 
     model_config = SettingsConfigDict(
         env_prefix="JANUS_",
@@ -198,3 +217,43 @@ def load_config(config_path: Optional[str | Path] = None) -> JanusSettings:
                     data = json.load(f)
                     return JanusSettings(**convert_legacy_dict(data))
     return JanusSettings()
+
+
+
+def resolve_search_params(cfg: JanusSettings) -> Tuple[float, float]:
+    """Resolve sim_min_score / mmr_lambda with fail-soft invalid-env fallback.
+
+    Honours the standard env > config > default precedence but, if a user
+    sets an obviously-bad env value (e.g. ``"abc"``, ``"NaN"``, ``"-1"``,
+    ``"1.5"``), logs a warning and falls back to the validated ``cfg.search``
+    value (i.e. config-yaml → built-in default). This prevents an
+    ``MCP restart + bad env`` pair from brick-ing the search_memory tool.
+
+    Returns:
+        (sim_min_score, mmr_lambda) — both in [0.0, 1.0].
+    """
+
+    def _safe(name: str, raw: Optional[str], cfg_value: float, lo: float, hi: float) -> float:
+        if raw is None or raw.strip() == "":
+            return cfg_value
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                "search param %s=%r is not numeric; falling back to %s",
+                name, raw, cfg_value,
+            )
+            return cfg_value
+        if v != v or v < lo or v > hi:  # NaN check + range check
+            logger.warning(
+                "search param %s=%s out of range [%s, %s]; falling back to %s",
+                name, v, lo, hi, cfg_value,
+            )
+            return cfg_value
+        return v
+
+    sim_raw = os.environ.get("JANUS_SEARCH__SIM_MIN_SCORE")
+    mmr_raw = os.environ.get("JANUS_SEARCH__MMR_LAMBDA")
+    sim = _safe("sim_min_score", sim_raw, cfg.search.sim_min_score, 0.0, 1.0)
+    mmr = _safe("mmr_lambda", mmr_raw, cfg.search.mmr_lambda, 0.0, 1.0)
+    return sim, mmr
