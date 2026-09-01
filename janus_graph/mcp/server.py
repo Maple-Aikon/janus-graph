@@ -186,6 +186,11 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
         search config (edge / node / episode / community) so MMR rerank
         stays consistent across the parallel fan-out.
 
+        v0.4.7: hotfix — ``graphiti_core.Graphiti.search()`` in 0.20.x
+        does NOT accept ``search_config`` kwarg. Switched to module-level
+        ``graphiti_core.search.search.search()`` which DOES consume
+        SearchConfig. Same wire shape, different call site.
+
         Note: ``group_id`` is locked to ``cfg.graphiti.group_id`` to keep
         PicoClaw's MCP tools in a single memory tenant.
         """
@@ -214,15 +219,21 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
             search_filter = SearchFilters(
                 invalid_at=[[DateFilter(comparison_operator=ComparisonOperator.is_null)]],
             )
-            results = await graphiti.search(
+            # graphiti_core 0.20.x: Graphiti.search() does NOT accept
+            # `search_config` kwarg (it hardcodes EDGE_HYBRID_SEARCH_RRF).
+            # Use the module-level `search()` function which IS the function
+            # that consumes SearchConfig (per graphiti_core.search.search).
+            from graphiti_core.search.search import search as graphiti_search
+            search_results = await graphiti_search(
+                clients=graphiti.clients,
                 query=query,
                 group_ids=[target_group],
-                num_results=limit,
-                search_config=search_config,
+                config=search_config,
                 search_filter=search_filter,
             )
+            edges = getattr(search_results, "edges", search_results) or []
             facts = []
-            for edge in getattr(results, "edges", results) if isinstance(results, (list, tuple)) else getattr(results, "edges", []):
+            for edge in edges:
                 facts.append({
                     "fact": getattr(edge, "fact", str(edge)),
                     "name": getattr(edge, "name", ""),
