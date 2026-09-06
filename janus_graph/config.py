@@ -153,6 +153,34 @@ class SearchConfig(BaseModel):
     mmr_lambda: float = 0.5     # mirrors graphiti_core DEFAULT_MMR_LAMBDA
 
 
+class FalkorCircuitSettings(BaseModel):
+    """Circuit-breaker policy wrapping FalkorDBServerManager.
+
+    Bounded retry guard: avoids probing / restart-storming the engine on
+    persistent failure. Three-state machine: CLOSED → OPEN → HALF_OPEN.
+
+    Precedence (per JanusSettings):
+        1. environment variable  e.g. ``JANUS_DAEMON__FALKOR_CIRCUIT__FAILURE_THRESHOLD=5``
+        2. YAML key              ``daemon.falkor_circuit.failure_threshold``
+        3. class default         see below
+    """
+    failure_threshold: int = 3        # consecutive failures → OPEN
+    reset_timeout_sec: int = 60       # OPEN → HALF_OPEN wait
+    half_open_max_probes: int = 1     # HALF_OPEN probe budget
+
+
+class HTTPSettings(BaseModel):
+    """aiohttp HTTP server bind settings (Phase 2 PR scope)."""
+    host: str = "127.0.0.1"
+    port: int = 8765
+
+
+class DaemonSettings(BaseModel):
+    """Phase 2 daemon runtime settings (B3 hard rule: no cron in Phase 2)."""
+    falkor_circuit: FalkorCircuitSettings = Field(default_factory=FalkorCircuitSettings)
+    http: HTTPSettings = Field(default_factory=HTTPSettings)
+
+
 def _resolve_default_yaml_file() -> Optional[Path]:
     env_path = os.getenv("JANUS_CONFIG_PATH")
     if env_path and Path(env_path).exists():
@@ -173,6 +201,7 @@ class JanusSettings(BaseSettings):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    daemon: DaemonSettings = Field(default_factory=DaemonSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="JANUS_",

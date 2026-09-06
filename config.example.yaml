@@ -94,3 +94,20 @@ report:
 search:
   sim_min_score: 0.6
   mmr_lambda: 0.5
+
+# 8. Daemon Runtime (Phase 2 PR scope — Plan #2 §4.1a, Appendix D)
+# Bound retry guard around FalkorDBServerManager: 3-state circuit-breaker
+# (CLOSED → OPEN → HALF_OPEN) prevents probe/restart storm when the engine
+# is persistently unavailable. Precedence: env > config > default.
+#   env:    JANUS_DAEMON__FALKOR_CIRCUIT__FAILURE_THRESHOLD / RESET_TIMEOUT_SEC / HALF_OPEN_MAX_PROBES
+#           JANUS_DAEMON__HTTP__PORT / JANUS_DAEMON__HTTP__HOST
+#   config: this file
+#   builtin defaults: 3 / 60 / 1 (matches Plan #2 §App-D)
+daemon:
+  falkor_circuit:
+    failure_threshold: 3        # consecutive failures → OPEN
+    reset_timeout_sec: 60       # OPEN → HALF_OPEN wait
+    half_open_max_probes: 1     # HALF_OPEN probe budget
+  http:
+    host: "127.0.0.1"
+    port: 8765
