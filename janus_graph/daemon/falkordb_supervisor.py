@@ -111,7 +111,7 @@ class DaemonSupervisor:
         """
         if not await self._breaker.allow_probe():
             # OPEN-skip: no syscall, no Falkor touch (T8 verification).
-            logger.debug("falkordb_supervisor: probe skipped (circuit OPEN)")
+            logger.info("falkordb_supervisor: probe skipped (circuit OPEN)")
             return False
 
         try:
