@@ -15,7 +15,13 @@ Phase 3 additions:
   - EmbeddingClient opened on boot (aiohttp session).
   - SearchEngine constructed (lazy redis connect — fail-soft).
 
+Phase 4 additions:
+  - CronLoop wired when daemon.cron_enabled=true (gated).
+    Sweep + dream run in-process; ai_cronjob.sh janus subshells SKIP
+    via /health alive-check. See janus_graph/daemon/cron_loop.py.
+
 Graceful shutdown:
+  - stop CronLoop tasks (Phase 4 — cancel + await drain)
   - stop accepting new HTTP requests
   - await in-flight handlers (aiohttp default)
   - close supervisor (no-op for sync manager)
@@ -35,6 +41,7 @@ from aiohttp import web
 
 from ..config import HTTPSettings, JanusSettings
 from ..pipeline.queue import EpisodeQueue
+from .cron_loop import CronLoop
 from .embedding_client import EmbeddingClient
 from .episode_queue_adapter import EpisodeQueueAdapter
 from .falkordb_supervisor import DaemonSupervisor
@@ -53,6 +60,7 @@ class DaemonContext:
     Phase 3 fields: queue (EpisodeQueue), queue_adapter (EpisodeQueueAdapter),
                     embedding_client (EmbeddingClient),
                     search_engine (SearchEngine).
+    Phase 4 fields: cron_loop (CronLoop) — only populated when cron_enabled.
     """
 
     settings: JanusSettings
@@ -64,6 +72,7 @@ class DaemonContext:
     queue_adapter: Optional[EpisodeQueueAdapter] = None
     embedding_client: Optional[EmbeddingClient] = None
     search_engine: Optional[SearchEngine] = None
+    cron_loop: Optional["CronLoop"] = None
     runner: Optional[web.AppRunner] = None
     site: Optional[web.BaseSite] = None
 
@@ -120,9 +129,10 @@ async def _shutdown_phase3_components(ctx: DaemonContext) -> None:
 
 
 async def boot(ctx: DaemonContext) -> None:
-    """Phase 2+3 boot: probe Falkor → wire Phase 3 → start HTTP.
+    """Phase 2+3+4 boot: probe Falkor → wire Phase 3 → start HTTP → start cron.
 
-    Per Plan #2 §4.1a, this is the full boot flow minus cron.
+    Per Plan #2 §4.1a + §6 Phase 4, full boot flow including cron_loop
+    (gated by daemon.cron_enabled).
     """
     logger.info("daemon: booting (version=%s)", ctx.version)
 
@@ -147,7 +157,15 @@ async def boot(ctx: DaemonContext) -> None:
     # 2. Phase 3 wiring (queue + embedding + search).
     await _build_phase3_components(ctx)
 
-    # 3. Build + start aiohttp.
+    # 3. Phase 4 cron loop — gated by daemon.cron_enabled. ai_cronjob.sh
+    #    alive-check skips janus subshells when this daemon is up.
+    ctx.cron_loop = CronLoop(
+        settings=ctx.settings,
+        circuit_state_provider=lambda: ctx.supervisor.breaker.state,
+    )
+    await ctx.cron_loop.start()
+
+    # 4. Build + start aiohttp.
     app = build_app(ctx)
     ctx.runner = web.AppRunner(app)
     await ctx.runner.setup()
@@ -157,10 +175,12 @@ async def boot(ctx: DaemonContext) -> None:
         port=ctx.http_settings.port,
     )
     await ctx.site.start()
+    cron_state = "ENABLED — Phase 4" if ctx.cron_loop.running else "disabled — Phase 4 gate off"
     logger.info(
-        "daemon: ready on port %d (cron disabled — Phase 4) "
+        "daemon: ready on port %d (cron %s) "
         "— http://%s:%d/health",
         ctx.http_settings.port,
+        cron_state,
         ctx.http_settings.host,
         ctx.http_settings.port,
     )
@@ -189,6 +209,13 @@ async def run(settings: JanusSettings) -> int:
         await ctx.shutdown_event.wait()
     finally:
         logger.info("daemon: shutting down (graceful, max 30s)")
+        # Phase 4: stop cron_loop FIRST so it doesn't start a new sweep
+        # while we're tearing down the queue + supervisor.
+        if ctx.cron_loop is not None:
+            try:
+                await asyncio.wait_for(ctx.cron_loop.stop(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning("daemon: cron_loop stop timed out")
         # Phase 3 cleanup.
         try:
             await asyncio.wait_for(_shutdown_phase3_components(ctx), timeout=10.0)

@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("janus_graph.daemon.http_server")
 
-__version__ = "0.3.0-phase3"
+__version__ = "0.4.0-phase4"
 
 
 def build_app(ctx: "DaemonContext") -> web.Application:

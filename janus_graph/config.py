@@ -326,6 +326,17 @@ def resolve_search_params(cfg: JanusSettings) -> Tuple[float, float]:
 # the model so JanusSettings() resolves DaemonSettings.lock / .search_graph
 # to concrete DaemonLockSettings / DaemonSearchGraphSettings instances.
 def _bind_phase3_forward_refs() -> None:
+    """Resolve Phase 3 forward refs on BOTH DaemonSettings and JanusSettings.
+
+    Phase 4 fix (2026-09-07): DaemonSettings uses string forward refs for
+    ``lock`` + ``search_graph`` so janus_graph.config can be imported
+    without dragging in aiohttp. Both classes need model_rebuild() — when
+    JanusSettings validates its ``daemon: DaemonSettings`` field, pydantic
+    instantiates DaemonSettings first, which requires the forward refs to
+    be resolved on DaemonSettings itself (not just on JanusSettings).
+    Rebuilding only JanusSettings left ``cli sweep`` and other config-only
+    callers broken (PydanticUserError: DaemonSettings is not fully defined).
+    """
     try:
         from janus_graph.daemon.phase3_settings import (  # noqa: WPS433
             DaemonLockSettings,
@@ -333,6 +344,18 @@ def _bind_phase3_forward_refs() -> None:
         )
     except ImportError:  # pragma: no cover — daemon module optional
         return
+    # 1. Rebuild DaemonSettings first so its forward refs are resolved.
+    #    Without this, ``JanusSettings(...)`` fails when it tries to
+    #    instantiate the ``daemon`` field with unresolved forward refs.
+    from janus_graph.config import DaemonSettings  # local import: avoid cycle
+    DaemonSettings.model_rebuild(
+        _types_namespace={
+            "DaemonLockSettings": DaemonLockSettings,
+            "DaemonSearchGraphSettings": DaemonSearchGraphSettings,
+        }
+    )
+    # 2. Rebuild JanusSettings so its ``daemon: DaemonSettings`` field picks
+    #    up the now-resolved DaemonSettings subclass.
     JanusSettings.model_rebuild(
         _types_namespace={
             "DaemonLockSettings": DaemonLockSettings,
