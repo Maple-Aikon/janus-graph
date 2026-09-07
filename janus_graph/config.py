@@ -176,9 +176,20 @@ class HTTPSettings(BaseModel):
 
 
 class DaemonSettings(BaseModel):
-    """Phase 2 daemon runtime settings (B3 hard rule: no cron in Phase 2)."""
+    """Phase 2/3 daemon runtime settings.
+
+    Phase 2 fields: falkor_circuit (3-state breaker), http (aiohttp bind).
+    Phase 3 fields: lock (3-mode advisory-lock for /episodes),
+                    search_graph (/search/graph endpoint knobs).
+    B3 hard rule: cron_loop NOT shipped in Phase 2/3 (gated by
+    daemon.cron_enabled=true, deferred to Phase 4).
+    """
     falkor_circuit: FalkorCircuitSettings = Field(default_factory=FalkorCircuitSettings)
     http: HTTPSettings = Field(default_factory=HTTPSettings)
+    cron_enabled: bool = False  # Phase 4 gate; ignored by daemon Phase 2/3.
+    # Phase 3 fields — resolved in JanusSettings.model_post_init via forward refs.
+    lock: "DaemonLockSettings" = Field(default=None)  # type: ignore[assignment]
+    search_graph: "DaemonSearchGraphSettings" = Field(default=None)  # type: ignore[assignment]
 
 
 def _resolve_default_yaml_file() -> Optional[Path]:
@@ -209,6 +220,23 @@ class JanusSettings(BaseSettings):
         extra="ignore",
         yaml_file=_resolve_default_yaml_file(),
     )
+
+    def model_post_init(self, __context: object) -> None:
+        """Resolve Phase 3 forward-ref defaults (DaemonLockSettings + DaemonSearchGraphSettings).
+
+        These live in a sibling module imported lazily to avoid circular import
+        at config-load time. Forward refs are pre-bound at module import via
+        ``JanusSettings.model_rebuild()`` below; this method only fills in
+        None defaults that survived the rebuild.
+        """
+        from janus_graph.daemon.phase3_settings import (
+            DaemonLockSettings,
+            DaemonSearchGraphSettings,
+        )
+        if self.daemon.lock is None:
+            object.__setattr__(self.daemon, "lock", DaemonLockSettings())
+        if self.daemon.search_graph is None:
+            object.__setattr__(self.daemon, "search_graph", DaemonSearchGraphSettings())
 
     @classmethod
     def settings_customise_sources(
@@ -286,3 +314,31 @@ def resolve_search_params(cfg: JanusSettings) -> Tuple[float, float]:
     sim = _safe("sim_min_score", sim_raw, cfg.search.sim_min_score, 0.0, 1.0)
     mmr = _safe("mmr_lambda", mmr_raw, cfg.search.mmr_lambda, 0.0, 1.0)
     return sim, mmr
+
+
+# ─── Phase 3 forward-ref resolution ────────────────────────────────────
+# DaemonSettings uses string forward refs for ``lock`` + ``search_graph`` so
+# ``janus_graph.config`` can be imported without dragging in
+# ``janus_graph.daemon.*`` (which transitively imports aiohttp — keep that
+# opt-in for callers that only need non-daemon settings).
+#
+# Once daemon.phase3_settings is importable, bind the forward refs and rebuild
+# the model so JanusSettings() resolves DaemonSettings.lock / .search_graph
+# to concrete DaemonLockSettings / DaemonSearchGraphSettings instances.
+def _bind_phase3_forward_refs() -> None:
+    try:
+        from janus_graph.daemon.phase3_settings import (  # noqa: WPS433
+            DaemonLockSettings,
+            DaemonSearchGraphSettings,
+        )
+    except ImportError:  # pragma: no cover — daemon module optional
+        return
+    JanusSettings.model_rebuild(
+        _types_namespace={
+            "DaemonLockSettings": DaemonLockSettings,
+            "DaemonSearchGraphSettings": DaemonSearchGraphSettings,
+        }
+    )
+
+
+_bind_phase3_forward_refs()
