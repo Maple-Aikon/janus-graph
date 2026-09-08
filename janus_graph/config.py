@@ -32,9 +32,23 @@ class EngineConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    """LLM provider parameters."""
+    """LLM provider parameters.
+
+    Default model is ``"free-ais"`` (LiteLLM proxy alias) — matches
+    ``config.yaml``'s ``graphiti.llm.model`` and ensures that any code path
+    reaching the field default still hits the local LiteLLM proxy rather than
+    a vendor-specific Anthropic model that the proxy cannot resolve.
+
+    See ``memory/202609/upgrade-janus-graph.md`` (2026-09-08) — defensive fix
+    after the FalkorDB recovery session surfaced `'claude-3-5-sonnet-20241022'`
+    strings in failed queue entries despite YAML override being correctly
+    wired. The hardcode was never reached under normal config load, but we
+    patch the default anyway so future daemon restarts, bare ``JanusSettings()``
+    invocations, or graphiti_core internals that bypass our instance builder
+    cannot leak the wrong model name.
+    """
     provider: str = "openai"
-    model: str = "claude-3-5-sonnet-20241022"
+    model: str = "free-ais"
     base_url: str = "http://127.0.0.1:4000/v1"
     api_key: str = "sk-litellm-proxy"
     temperature: float = 0.1
