@@ -206,15 +206,125 @@ class DaemonSettings(BaseModel):
     search_graph: "DaemonSearchGraphSettings" = Field(default=None)  # type: ignore[assignment]
 
 
+def _resolve_home() -> Path:
+    """Resolve JANUS_GRAPH_HOME, defaulting to ~/.janus-graph/.
+
+    All relative paths in config.yaml are resolved against this directory at
+    config-load time (see ``JanusSettings.model_post_init``). The home
+    directory is created lazily — ``model_post_init`` calls
+    ``mkdir(parents=True, exist_ok=True)`` for any path it touches.
+
+    Precedence:
+        1. ``JANUS_GRAPH_HOME`` environment variable
+        2. ``~/.janus-graph/`` (XDG-style fallback)
+
+    Ref: goal ``janus-graph-home-env-refactor`` (2026-09-08). Paved the way
+    for moving runtime state out of the source tree (``~/projects/janus-graph/``)
+    into ``~/.picoclaw/workspace/apps/janus-graph/``.
+    """
+    env_home = os.getenv("JANUS_GRAPH_HOME")
+    if env_home:
+        return Path(env_home).expanduser().resolve()
+    return (Path.home() / ".janus-graph").resolve()
+
+
 def _resolve_default_yaml_file() -> Optional[Path]:
+    """Locate the config YAML file.
+
+    Precedence:
+        1. ``JANUS_CONFIG_PATH`` env var (explicit override — escape hatch for
+           multi-tenant / parallel test runs)
+        2. ``$JANUS_GRAPH_HOME/config.yaml`` (new canonical location)
+        3. ``./config.yaml`` (CWD — legacy, kept for CLI usage from project root)
+        4. ``./config.example.yaml`` (last-resort dev seed)
+    """
     env_path = os.getenv("JANUS_CONFIG_PATH")
     if env_path and Path(env_path).exists():
         return Path(env_path)
+    home = _resolve_home()
+    home_cfg = home / "config.yaml"
+    if home_cfg.exists():
+        return home_cfg
     if Path("config.yaml").exists():
         return Path("config.yaml")
     if Path("config.example.yaml").exists():
         return Path("config.example.yaml")
     return None
+
+
+# Relative-path fields that ``model_post_init`` rewrites against
+# ``JANUS_GRAPH_HOME``. Anything absolute is left alone. The dotted key is
+# the path inside the JanusSettings tree; the value is the type — we use the
+# schema annotations to coerce back from str after rewriting.
+_HOME_RELATIVE_PATH_FIELDS = (
+    "engine.bin_dir",
+    "engine.data_dir",
+    "engine.pid_file",
+    "engine.log_file",
+    "pipeline.queue_db_path",
+    "heuristics.quirks_log_path",
+    "report.sinks.file.path",
+)
+
+
+def _apply_home_relative_paths(cfg: "JanusSettings", home: Path) -> None:
+    """Prefix every relative path field with ``home``.
+
+    Walks ``_HOME_RELATIVE_PATH_FIELDS`` and replaces any relative string
+    with ``str(home / original_value)``. Absolute paths and ``Path`` objects
+    are left untouched so operators can still pin a path to e.g.
+    ``/var/lib/janus-graph`` on production hosts.
+
+    ``dotted`` keys can be 2-4 levels deep (e.g. ``report.sinks.file.path``).
+    Only the leaf is rewritten; intermediate objects keep their identity so
+    any caller holding a reference to e.g. ``cfg.report.sinks.file`` still
+    sees the updated ``path`` attribute.
+
+    Called from ``JanusSettings.model_post_init`` after forward-ref defaults
+    are resolved.
+    """
+    for dotted in _HOME_RELATIVE_PATH_FIELDS:
+        parts = dotted.split(".")
+        leaf = parts[-1]
+        parent = cfg
+        for segment in parts[:-1]:
+            parent = getattr(parent, segment)
+        current = getattr(parent, leaf)
+        if isinstance(current, Path):
+            if current.is_absolute():
+                continue
+            new_path = (home / current).resolve()
+            setattr(parent, leaf, new_path)
+            continue
+        if not isinstance(current, str):
+            continue
+        if not current or Path(current).is_absolute():
+            continue
+        new_path = (home / current).resolve()
+        setattr(parent, leaf, str(new_path))
+    # Ensure parent dirs exist for file paths (logs/quirks/report) and the
+    # SQLite parent. We deliberately do NOT mkdir() the bin_dir — that's the
+    # operator's responsibility to populate. data_dir (falkordb rdb home) is
+    # created so BGSAVE dump.rdb can land without churn later.
+    for dotted in (
+        "pipeline.queue_db_path",
+        "heuristics.quirks_log_path",
+        "report.sinks.file.path",
+        "engine.log_file",
+        "engine.data_dir",
+    ):
+        parts = dotted.split(".")
+        leaf = parts[-1]
+        parent = cfg
+        for segment in parts[:-1]:
+            parent = getattr(parent, segment)
+        current = getattr(parent, leaf)
+        if not current:
+            continue
+        p = Path(current)
+        is_dir = dotted in ("engine.data_dir",)
+        target = p if is_dir else p.parent
+        target.mkdir(parents=True, exist_ok=True)
 
 
 class JanusSettings(BaseSettings):
@@ -236,12 +346,15 @@ class JanusSettings(BaseSettings):
     )
 
     def model_post_init(self, __context: object) -> None:
-        """Resolve Phase 3 forward-ref defaults (DaemonLockSettings + DaemonSearchGraphSettings).
+        """Resolve Phase 3 forward-ref defaults (DaemonLockSettings + DaemonSearchGraphSettings)
+        + apply JANUS_GRAPH_HOME prefix to all relative paths in config.yaml.
 
-        These live in a sibling module imported lazily to avoid circular import
-        at config-load time. Forward refs are pre-bound at module import via
+        Forward refs are pre-bound at module import via
         ``JanusSettings.model_rebuild()`` below; this method only fills in
         None defaults that survived the rebuild.
+
+        Home resolution happens AFTER forward-ref fills so we can read the
+        fully-typed ``cfg`` tree.
         """
         from janus_graph.daemon.phase3_settings import (
             DaemonLockSettings,
@@ -251,6 +364,9 @@ class JanusSettings(BaseSettings):
             object.__setattr__(self.daemon, "lock", DaemonLockSettings())
         if self.daemon.search_graph is None:
             object.__setattr__(self.daemon, "search_graph", DaemonSearchGraphSettings())
+        # Apply JANUS_GRAPH_HOME to relative paths AFTER forward refs so the
+        # schema is fully materialized and we don't have to chase lazy types.
+        _apply_home_relative_paths(self, _resolve_home())
 
     @classmethod
     def settings_customise_sources(

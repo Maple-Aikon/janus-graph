@@ -31,9 +31,22 @@ def _configure_logging() -> None:
 
 
 def main() -> int:
-    """Parse config + enter asyncio loop."""
+    """Parse config + enter asyncio loop.
+
+    Logs the effective ``JANUS_GRAPH_HOME`` so operators can verify which
+    directory the daemon is using at boot. See ``_resolve_home`` in
+    ``config.py`` for the resolution precedence.
+    """
     _configure_logging()
     settings = JanusSettings()
+    from ..config import _resolve_home
+    home = _resolve_home()
+    import os as _os
+    logging.getLogger("janus_graph.daemon").info(
+        "JANUS_GRAPH_HOME=%s (resolved from %s)",
+        home,
+        "env" if _os.getenv("JANUS_GRAPH_HOME") else "default(~/.janus-graph)",
+    )
     return asyncio.run(run(settings))
 
 
