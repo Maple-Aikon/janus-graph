@@ -81,6 +81,45 @@ class DaemonContext:
         self.shutdown_event.set()
 
 
+async def _check_falkordb_binary(ctx: DaemonContext) -> None:
+    """Phase 2 defensive boot check: missing binary → disable restart policy.
+
+    Per Plan #3 §5.1: if ``bin/falkordb.so`` is missing (fresh clone, failed
+    install, manual deletion), the restart policy would spam critical logs
+    every probe tick. Soft-disable here: daemon still runs, but every
+    restart attempt short-circuits with a one-shot warning.
+    """
+    try:
+        _, falkordb_module = ctx.supervisor.manager.resolve_binary_paths()
+    except Exception as e:
+        # If resolve_binary_paths itself fails (rare) — also disable.
+        logger.warning(
+            "daemon: falkordb binary resolve failed (%s) — "
+            "restart policy disabled", e,
+        )
+        ctx.supervisor.restart_policy.disable(
+            reason=f"binary_resolve_failed:{e}"
+        )
+        return
+
+    if not falkordb_module.exists():
+        logger.critical(
+            "daemon: falkordb binary missing at %s — "
+            "restart policy DISABLED (Falkor will not auto-recover). "
+            "Restore the binary then `pmc restart janus-graph-daemon`.",
+            falkordb_module,
+        )
+        ctx.supervisor.restart_policy.disable(
+            reason=f"binary_missing:{falkordb_module}"
+        )
+        return
+
+    logger.info(
+        "daemon: falkordb binary OK at %s — restart policy armed",
+        falkordb_module,
+    )
+
+
 async def _build_phase3_components(ctx: DaemonContext) -> None:
     """Phase 3 wiring: queue + adapter + embedding + search.
 
@@ -133,8 +172,18 @@ async def boot(ctx: DaemonContext) -> None:
 
     Per Plan #2 §4.1a + §6 Phase 4, full boot flow including cron_loop
     (gated by daemon.cron_enabled).
+
+    Phase 2 (Plan #3 §5.1): binary presence check before policy can fire.
+    Missing ``bin/falkordb.so`` would cause restart-policy to spam critical
+    logs every cron tick forever; better to detect at boot and disable.
     """
     logger.info("daemon: booting (version=%s)", ctx.version)
+
+    # 0. Phase 2: defensive binary presence check (Plan #3 §5.1 mitigation).
+    # If falkordb.so missing → soft-disable restart policy so we don't spam
+    # logs forever; daemon still boots (the existing circuit-breaker handles
+    # normal "Falkor down" case without trying to restart).
+    await _check_falkordb_binary(ctx)
 
     # 1. Attach/start Falkor via supervisor (lazy attach — Option C from plan).
     falkor_ok = await ctx.supervisor.probe()

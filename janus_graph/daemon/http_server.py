@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any, Dict
 from aiohttp import web
 
 from ..config import HTTPSettings
-from .circuit_breaker import CircuitState
+from .circuit_breaker import CircuitState  # noqa: F401  (re-exported for tests)
 from .episode_queue_adapter import (
     EpisodeDuplicateError,
     LockModeError,
@@ -115,6 +115,10 @@ async def health_handler(request: web.Request) -> web.Response:
             "reset_timeout_sec": snap.reset_timeout_sec,
             "retry_at": snap.retry_at,
         },
+        # Phase 2 (Plan #3): restart-policy snapshot for ops visibility.
+        # T9 invariant: additive field — old clients ignoring this still get
+        # a 200/503 + circuit + queue_stats as before.
+        "restart_policy": _restart_policy_payload(ctx),
         "daemon_version": __version__,
         "queue_stats": queue_stats,
     }
@@ -122,6 +126,29 @@ async def health_handler(request: web.Request) -> web.Response:
     # Degraded → 503 with same body (operationally useful — clients see state).
     status_code = 200 if falkor_ok else 503
     return web.json_response(payload, status=status_code)
+
+
+def _restart_policy_payload(ctx: "DaemonContext") -> dict:
+    """Phase 2 (Plan #3 §7 + §11): serialise RestartPolicySnapshot for /health.
+
+    Returns a dict with: state, restarts_in_window, max_per_hour,
+    seconds_since_last_restart, cooldown_sec, disabled_reason.
+    Field shape is stable even when policy is operator-disabled — clients
+    can distinguish "healthy" (state=ok) from "armed but disabled".
+    """
+    policy = ctx.supervisor.restart_policy
+    snap = policy.snapshot()
+    return {
+        "state": snap.state.value,
+        "restarts_in_window": snap.restarts_in_window,
+        "max_per_hour": snap.max_per_hour,
+        "seconds_since_last_restart": (
+            round(snap.seconds_since_last_restart, 2)
+            if snap.seconds_since_last_restart is not None else None
+        ),
+        "cooldown_sec": snap.cooldown_sec,
+        "disabled_reason": policy.disabled_reason,
+    }
 
 
 # ─── /shutdown (Phase 2 — unchanged) ───────────────────────────────────

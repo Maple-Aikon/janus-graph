@@ -30,7 +30,9 @@ Thread-safety: monotonic clock + simple list append. Lock-free because:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -89,6 +91,35 @@ class FalkorRestartPolicy:
         self._restart_times: Deque[float] = deque()
         self._last_restart_at: Optional[float] = None
         self._state: RestartPolicyState = RestartPolicyState.OK
+        # Phase 2 (Plan #3 §4.2): serialise concurrent restart attempts so a
+        # probe storm (cron + MCP + /health) cannot spawn twice. ``threading.Lock``
+        # is used because ``attempt_restart()`` is itself sync (manager.start()
+        # is sync, wrapped in asyncio.to_thread by the supervisor). Async locks
+        # would force us to make the whole pipeline async; not worth it.
+        self._restart_in_progress: threading.Lock = threading.Lock()
+        # Operator-controlled kill switch — set by lifespan boot check when
+        # bin/falkordb.so missing. Pre-empts all gate checks below.
+        self._disabled_by_operator: bool = False
+
+    def disable(self, reason: str) -> None:
+        """Soft-disable policy (used by lifespan binary-check + future ops kill-switch).
+
+        Idempotent. ``reason`` is logged once at WARNING. After disable(),
+        attempt_restart() short-circuits to False without consuming budget
+        — so no spam, no state mutation, /health still reports the reason via
+        the snapshot ``disabled_reason`` field.
+        """
+        if self._disabled_by_operator:
+            return
+        self._disabled_by_operator = True
+        logger.warning(
+            "restart_policy: DISABLED by operator (reason=%s)", reason
+        )
+
+    @property
+    def disabled_reason(self) -> Optional[str]:
+        """Return the disable reason (None if policy is enabled)."""
+        return "operator_disabled" if self._disabled_by_operator else None
 
     # ─── properties ──────────────────────────────────────────────────────
 
@@ -190,11 +221,35 @@ class FalkorRestartPolicy:
             - transitions to BUDGET_EXHAUSTED → FATAL_DEGRADED
             - fires ``on_budget_exhausted`` callback (one-shot)
             - emits critical log
+
+        Phase 2 (Plan #3 §4.2): concurrent calls are serialised via
+        ``self._restart_in_progress`` (asyncio.Lock). The second caller
+        short-circuits to False without consuming budget — caller sees
+        the lock as "another restart is in flight, do not duplicate".
         """
+        if self._disabled_by_operator:
+            logger.warning(
+                "restart_policy: restart refused (operator_disabled)"
+            )
+            return False
+
         if self._state is RestartPolicyState.FATAL_DEGRADED:
             logger.error("restart_policy: restart refused (FATAL_DEGRADED)")
             return False
 
+        # Lock acquisition is non-blocking: if another restart is in flight,
+        # skip rather than wait (caller is likely a probe-storm duplicate).
+        if self._restart_in_progress.locked():
+            logger.debug(
+                "restart_policy: restart skipped (concurrent _restart in flight)"
+            )
+            return False
+
+        with self._restart_in_progress:
+            return self._attempt_restart_locked()
+
+    def _attempt_restart_locked(self) -> bool:
+        """Inner attempt_restart — assumed to hold ``_restart_in_progress``."""
         self._prune_window()
 
         # Cooldown gate.

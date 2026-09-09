@@ -229,5 +229,10 @@ class DaemonSupervisor:
         """Direct manager access (for tests; do not mutate)."""
         return self._manager
 
+    @property
+    def restart_policy(self) -> FalkorRestartPolicy:
+        """Direct restart-policy access (for /health wiring + tests)."""
+        return self._restart_policy
+
 
 __all__ = ["DaemonSupervisor"]
