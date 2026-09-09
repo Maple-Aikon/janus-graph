@@ -73,7 +73,19 @@ class FalkorDBServerManager:
             "--logfile", str(self.log_file),
         ]
 
-        subprocess.run(cmd, check=True)
+        # Plan #3 §9 BLOCK #2a: 10s timeout prevents redis-server from
+        # hanging daemon if binary fails to start (e.g. corrupt AOF, disk full).
+        # TimeoutExpired → log critical + return False so supervisor can trip CB.
+        import subprocess as _sp
+        try:
+            _sp.run(cmd, check=True, timeout=10)
+        except _sp.TimeoutExpired:
+            import logging
+            logging.getLogger("janus_graph.engine.server").critical(
+                "falkordb start timed out after 10s; binary likely stuck "
+                "(check AOF, disk, or fork limits)"
+            )
+            return False
         time.sleep(0.5)
         return self.is_running()
 

@@ -22,11 +22,24 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING, Union
 
 from ..config import FalkorCircuitSettings
 
+if TYPE_CHECKING:  # pragma: no cover
+    # Imported only for type checkers; runtime keeps FalkorDBServerManager
+    # decoupled to avoid an import cycle (circuit_breaker → falkordb_supervisor).
+    from ..engine.server import FalkorDBServerManager
+
 logger = logging.getLogger("janus_graph.daemon.circuit_breaker")
+
+# Callback signature for CLOSED → OPEN hook. Receives the CircuitSnapshot at
+# transition time + the FalkorDBServerManager. Manager is typed as Any at
+# runtime to break the import cycle.
+OnCircuitOpenedCallback = Callable[
+    ["CircuitSnapshot", Any],
+    Union[None, Awaitable[None]],
+]
 
 
 class CircuitState(str, Enum):
@@ -76,6 +89,11 @@ class FalkorCircuitBreaker:
         # state_lock BEFORE probe_lock if both needed.
         self._state_lock = asyncio.Lock()
         self._probe_lock = asyncio.Lock()
+        # CLOSED → OPEN hook (registered by the supervisor). Fires only on
+        # the CLOSED→OPEN transition (NOT HALF_OPEN→OPEN, which is a probe
+        # retry — see Plan #3 §9 Q7). Can be sync or async; if async, the
+        # awaiter is the supervisor (we schedule via asyncio.create_task).
+        self._on_open_callback: Optional[OnCircuitOpenedCallback] = None
 
     # ─── properties ──────────────────────────────────────────────────────
 
@@ -183,14 +201,89 @@ class FalkorCircuitBreaker:
             last_transition_at=self._last_transition_at,
         )
 
+    def on_open(self, callback: OnCircuitOpenedCallback) -> None:
+        """Register a callback fired ONLY on CLOSED → OPEN transitions.
+
+        Replaces any previously-registered callback. Per Plan #3 §9 Q7:
+        the hook is intentionally NOT fired on HALF_OPEN → OPEN (which is a
+        probe retry, not a fresh outage) — firing it there caused a restart
+        storm in the previous draft because every cooldown cycle triggered
+        a new restart attempt.
+
+        The callback receives ``(CircuitSnapshot, FalkorDBServerManager)``
+        and may be sync or async. Async callbacks are scheduled via
+        ``asyncio.create_task`` from inside ``_transition_to()``.
+
+        Typical registration:
+            breaker.on_open(lambda snap, mgr: policy.on_circuit_opened(snap, mgr))
+        or
+            breaker.on_open(policy.on_circuit_opened)
+        if ``policy`` already binds ``manager`` via ``register_manager``.
+
+        Test-only override: assign ``breaker._on_open_callback`` directly.
+        """
+        self._on_open_callback = callback
+
     # ─── internal ────────────────────────────────────────────────────────
 
     def _transition_to(self, new_state: CircuitState) -> None:
-        """State transition (caller holds state_lock)."""
+        """State transition (caller holds state_lock).
+
+        Fires the ``_on_open_callback`` ONLY on CLOSED → OPEN — see Plan #3
+        §9 Q7 for the rationale (HALF_OPEN → OPEN is a probe retry and
+        must NOT trigger a fresh restart cascade).
+
+        The callback signature is ``(snapshot, manager)``. Callers typically
+        register via::
+
+            breaker.on_open(
+                lambda snap, mgr: policy.on_circuit_opened(snap, mgr)
+            )
+
+        Callback exceptions are logged but never break the state machine
+        (which has already transitioned).
+        """
         old_state = self._state
         self._state = new_state
         self._last_transition_at = time.monotonic()
         logger.debug("circuit_breaker: %s → %s", old_state.value, new_state.value)
+
+        # Fire callback only on CLOSED → OPEN.
+        if (
+            old_state is CircuitState.CLOSED
+            and new_state is CircuitState.OPEN
+            and self._on_open_callback is not None
+        ):
+            cb = self._on_open_callback
+            snap = self.snapshot()
+            # The supervisor passes its own FalkorDBServerManager via a
+            # closure; we don't have a reference here. The hook is invoked
+            # with snap + a sentinel manager_arg that the caller resolves.
+            # See FalkorRestartPolicy.on_circuit_opened: it accepts the
+            # manager either bound (register_manager) or as the 2nd arg.
+            try:
+                result = cb(snap, _NULL_MANAGER_SENTINEL)
+                if asyncio.iscoroutine(result):
+                    asyncio.create_task(_invoke_async_callback(cb, snap))
+            except Exception:
+                logger.exception(
+                    "circuit_breaker: sync on_open callback raised; "
+                    "blocking restart attempt"
+                )
+
+
+_NULL_MANAGER_SENTINEL = object()
+
+
+async def _invoke_async_callback(cb, snap):
+    """Await an async on_open callback with error containment."""
+    try:
+        await cb(snap, _NULL_MANAGER_SENTINEL)
+    except Exception:
+        logger.exception(
+            "circuit_breaker: async on_open callback raised; "
+            "blocking restart attempt"
+        )
 
 
 # ─── module test helper ─────────────────────────────────────────────────
@@ -208,4 +301,5 @@ __all__ = [
     "CircuitState",
     "CircuitSnapshot",
     "FalkorCircuitBreaker",
+    "OnCircuitOpenedCallback",
 ]

@@ -125,10 +125,71 @@ class CLISinkConfig(BaseModel):
 
 
 class TelegramSinkConfig(BaseModel):
+    """Telegram sink configuration.
+
+    Direct bot-API only — POSTs JSON to
+    ``https://api.telegram.org/bot{bot_token}/sendMessage``. Requires
+    ``bot_token`` + ``chat_id``.
+
+    For custom routing (e.g. PicoClaw's ``send_telegram.sh``), configure the
+    generic ``PipeSink`` (``pipe.command``) instead — Janus-Graph no longer
+    hardcodes paths to external scripts to keep this sink reusable.
+    """
+
     enabled: bool = False
     bot_token: str = ""
     chat_id: str = ""
     rate_limit_per_min: int = 10
+    min_severity: str = "info"
+
+
+class PipeSinkConfig(BaseModel):
+    """Generic CLI pipe sink configuration.
+
+    Use this when you want Janus-Graph to forward events to *any* external
+    notification CLI by piping the rendered text to its stdin. Decouples
+    Janus-Graph from a specific notifier (e.g. ``send_telegram.sh``,
+    ``gh``, ``mail``, ``jq``, ``curl``, etc.).
+
+    Example — PicoClaw ``send_telegram.sh`` (private chat):
+
+    .. code-block:: yaml
+
+        pipe:
+          enabled: true
+          command: ["/home/maple/.picoclaw/workspace/cli-bin/terminals/send_telegram.sh"]
+          use_stdin: true
+          extra_args: []
+          timeout_sec: 15.0
+          min_severity: "info"
+
+    Example — same script routed to the reasoning channel:
+
+    .. code-block:: yaml
+
+        pipe:
+          enabled: true
+          command: ["/home/maple/.picoclaw/workspace/cli-bin/terminals/send_telegram.sh"]
+          extra_args: ["--channel"]
+          use_stdin: true
+
+    Example — pipe through ``jq`` for routing:
+
+    .. code-block:: yaml
+
+        pipe:
+          enabled: true
+          command: ["jq", "-r", '.kind + ": " + .summary']
+    """
+
+    enabled: bool = False
+    command: List[str] = Field(default_factory=list)
+    extra_args: List[str] = Field(default_factory=list)
+    use_stdin: bool = True
+    timeout_sec: float = 15.0
+    min_severity: str = "info"
+    cwd: str = ""
+    env: Dict[str, str] = Field(default_factory=dict)
 
 
 class WebhookSinkConfig(BaseModel):
@@ -143,6 +204,7 @@ class ReportSinksConfig(BaseModel):
     file: FileSinkConfig = Field(default_factory=FileSinkConfig)
     cli: CLISinkConfig = Field(default_factory=CLISinkConfig)
     telegram: TelegramSinkConfig = Field(default_factory=TelegramSinkConfig)
+    pipe: PipeSinkConfig = Field(default_factory=PipeSinkConfig)
     webhook: WebhookSinkConfig = Field(default_factory=WebhookSinkConfig)
 
 
@@ -183,6 +245,22 @@ class FalkorCircuitSettings(BaseModel):
     half_open_max_probes: int = 1     # HALF_OPEN probe budget
 
 
+class FalkorRestartPolicySettings(BaseModel):
+    """Restart-rate policy for FalkorDBServerManager (Plan #3 / Phase 1).
+
+    Decoupled from FalkorCircuitSettings so restart cadence is predictable
+    even when circuit-breaker state cycles rapidly. Layered as:
+      - cooldown_sec: minimum seconds between consecutive restarts
+      - max_per_hour: rolling-window budget over a 1-hour span
+
+    If ``max_per_hour`` restarts occur within any 1-hour window, the policy
+    enters FATAL_DEGRADED and refuses further restarts until operator
+    intervention (manual ``pmc restart janus-graph`` clears state).
+    """
+    cooldown_sec: int = 60        # minimum gap between restarts
+    max_per_hour: int = 5         # rolling 1-hour rate-limit
+
+
 class HTTPSettings(BaseModel):
     """aiohttp HTTP server bind settings (Phase 2 PR scope)."""
     host: str = "127.0.0.1"
@@ -199,6 +277,9 @@ class DaemonSettings(BaseModel):
     daemon.cron_enabled=true, deferred to Phase 4).
     """
     falkor_circuit: FalkorCircuitSettings = Field(default_factory=FalkorCircuitSettings)
+    falkor_restart_policy: FalkorRestartPolicySettings = Field(
+        default_factory=FalkorRestartPolicySettings,
+    )
     http: HTTPSettings = Field(default_factory=HTTPSettings)
     cron_enabled: bool = False  # Phase 4 gate; ignored by daemon Phase 2/3.
     # Phase 3 fields — resolved in JanusSettings.model_post_init via forward refs.
