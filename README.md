@@ -10,6 +10,7 @@
 - 🌙 **Dream Mode Consolidation**: Autonomous memory clustering, 2-tier deduplication, orphan node pruning, and DLQ auto-repair.
 - 🔌 **Standard Model Context Protocol (MCP)**: Seamless integration into agent ecosystems via FastMCP/stdio.
 - 📊 **Multi-Channel Health Reporting**: Granular status reporting with file, CLI, Telegram, and Webhook sinks.
+- 🩹 **Auto-Restart Supervisor** (v0.7.0-restart-supervisor): Push-trigger bounded retry guard hooked into the FalkorDB circuit breaker. Self-heals from a crashed engine (cooldown_sec=60, max_per_hour=5) without spamming `/health` 503 or requiring manual `pmc restart`. See [docs/AUTO_RESTART_SUPERVISOR.md](docs/AUTO_RESTART_SUPERVISOR.md) for the state machine.
 
 ---
 

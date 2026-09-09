@@ -60,7 +60,7 @@ cache:
 
 # 6. Multi-Channel Health & Audit Reporting
 report:
-  min_severity: "error"
+  min_severity: "info"
   sinks:
     file:
       enabled: true
@@ -71,12 +71,48 @@ report:
       enabled: true
       format: "pretty"  # "pretty" | "json" | "summary"
       min_severity: "error"
+    # Telegram sink — direct bot API only (POST JSON to api.telegram.org).
+    # Requires `bot_token` and `chat_id`. Use the `pipe` sink below for
+    # custom CLI notifiers (e.g. PicoClaw's send_telegram.sh).
     telegram:
       enabled: false
       bot_token: ""
       chat_id: ""
       rate_limit_per_min: 10
-      min_severity: "error"
+      min_severity: "info"
+    # Generic CLI pipe sink — forward event text to ANY external command.
+    # Decouples Janus-Graph from specific notifiers so others can wire their
+    # own CLI (curl, send_telegram.sh, gh, mail, jq, ...).
+    #   `command`         argv list (first elem = binary path)
+    #   `extra_args`      appended after the event text (e.g. flags like --channel)
+    #   `use_stdin`       true → pipe text via stdin; false → pass text as final argv
+    #   `timeout_sec`     subprocess timeout
+    #   `min_severity`    same severity gate as other sinks
+    #   `cwd` / `env`     optional subprocess overrides
+    #
+    # Example A — PicoClaw send_telegram.sh, piped via stdin (default):
+    #   command: ["<abs-path>/cli-bin/terminals/send_telegram.sh"]
+    #   use_stdin: true
+    #
+    # Example B — same script routed to a reasoning channel via --channel:
+    #   command: ["<abs-path>/cli-bin/terminals/send_telegram.sh"]
+    #   extra_args: ["--channel"]
+    #
+    # Example C — pipe through jq to extract kind+summary:
+    #   command: ["jq", "-r", ".kind + \": \" + .summary"]
+    #   use_stdin: true
+    #
+    # Example D — POST a webhook via curl:
+    #   command: ["curl", "-sS", "-X", "POST", "-H", "Content-Type: application/json",
+    #             "--data-binary", "@-", "https://hooks.example.com/janus"]
+    #   use_stdin: true
+    pipe:
+      enabled: false
+      command: []
+      extra_args: []
+      use_stdin: true
+      timeout_sec: 15.0
+      min_severity: "info"
     webhook:
       enabled: false
       url: ""
@@ -111,3 +147,43 @@ daemon:
   http:
     host: "127.0.0.1"
     port: 8765
+  # Phase 4 cutover (Plan #2 §6 + §4.1b) — in-process CronLoop takes over sweep + dream.
+  # ai_cronjob.sh's alive-check honors this gate: daemon up + cron_enabled=true → SKIP.
+  # Rollback: flip to false + restart daemon OR `pkill janus_graph.daemon` → cron resumes legacy path.
+  cron_enabled: true
+  # Phase 3 dual-transport (Plan #2 §3.2 + §6 Phase 3):
+  #   mcp_only        — MCP path only (daemon sits idle as health probe; safe default)
+  #   daemon_only     — daemon path only (MCP tools disabled)
+  #   dual_with_lock  — both routes, daemon guards via EpisodeQueue enqueue_guarded()
+  # Schema: janus_graph.daemon.phase3_settings.DaemonLockSettings (mode: LockMode + instance_id_prefix)
+  lock:
+    mode: mcp_only
+    instance_id_prefix: daemon
+  # Phase 3.1 /search/graph endpoint (Plan #2 §6 Phase 3.1)
+  # Schema: janus_graph.daemon.phase3_settings.DaemonSearchGraphSettings
+  search_graph:
+    max_facts_per_query: 5000
+    traversal_timeout_sec: 2.0
+    embedding_concurrency: 4
+    default_min_cosine: 0.5
+    default_mmr_lambda: 0.7
+    default_limit: 10
+    max_limit: 50
+  # Phase 4 PR — Plan #3 (FalkorDB Auto-Restart Supervisor, v0.7.0-restart-supervisor).
+  # Push-trigger restart policy (no watcher) hooked into the 3-state circuit
+  # breaker (CLOSED → OPEN → HALF_OPEN). Bounded retry guard so the daemon
+  # self-heals from a crashed FalkorDB instead of just spamming /health 503.
+  #
+  # Lifecycle: circuit OPEN → policy attempts restart → on success, circuit
+  # is auto-closed by the next probe; on failure, policy enters cooldown and
+  # eventually FATAL_DEGRADED (max_per_hour exhausted).
+  #
+  # Precedence: env > config > default.
+  #   env:    JANUS_DAEMON__FALKOR_RESTART_POLICY__COOLDOWN_SEC
+  #           JANUS_DAEMON__FALKOR_RESTART_POLICY__MAX_PER_HOUR
+  #   config: this file
+  #   builtin defaults: 60 / 5 (matches Plan #3 §6 + Q2 decision)
+  # Schema: janus_graph.config.FalkorRestartPolicySettings
+  falkor_restart_policy:
+    cooldown_sec: 60           # minimum gap between consecutive restarts
+    max_per_hour: 5            # rolling 1-hour rate-limit (FATAL_DEGRADED after)
