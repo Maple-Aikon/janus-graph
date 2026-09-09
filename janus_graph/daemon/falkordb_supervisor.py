@@ -92,6 +92,59 @@ def _redis_ping(host: str, port: int, timeout: float) -> ProbeState:
     return ProbeState.DEAD
 
 
+def _module_list(host: str, port: int, timeout: float) -> bool:
+    """Sync Redis MODULE LIST check — returns True iff falkordb module loaded.
+
+    Phase 3.1 fix (redislite-zombie false-positive). A bare redis-server (e.g.
+    redislite orphan from a prior python session) will respond to PING with
+    +PONG but has no falkordb module — so ``_redis_ping`` reports ALIVE while
+    FalkorDB is effectively absent. Graphiti queries then fail with cryptic
+    "unknown command GRAPH.QUERY" errors.
+
+    RESP wire format (minimal):
+      - send: ``MODULE LIST\\
+``
+      - recv: ``*N\\
+`` followed by N array elements; each starts with
+        ``*2\\
+$4\\
+name\\
+$N\\
+<name>\\
+``
+      - bare redis (no falkordb) returns 0 or 1 default module
+      - falkordb-loaded redis returns the standard modules + ``falkordb``
+
+    We do a substring match on the word ``falkordb`` (case-insensitive) in the
+    full response. This avoids parsing the full RESP array — the simple PING
+    already proved TCP + redis-protocol are alive, so the only remaining
+    question is "did this redis load the falkordb module?".
+
+    Returns True iff the word ``falkordb`` appears anywhere in the response.
+    Returns False on any error (timeout, connection refused, malformed reply).
+    """
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as s:
+            s.sendall(b"MODULE LIST" + bytes([13, 10]))
+            data = b""
+            # MODULE LIST reply is multi-line; read until we have at least 1KB
+            # or the socket closes. 1KB is more than enough for the standard
+            # 4-5 modules falkordb-loaded redis reports.
+            s.settimeout(timeout)
+            while len(data) < 1024:
+                try:
+                    chunk = s.recv(1024)
+                except (socket.timeout, TimeoutError):
+                    break
+                if not chunk:
+                    break
+                data += chunk
+    except (OSError, TimeoutError):
+        return False
+    return b"falkordb" in data.lower()
+
+
 class DaemonSupervisor:
     """Falkor supervisor with circuit-breaker gating.
 
@@ -187,6 +240,48 @@ class DaemonSupervisor:
         else:
             await self._breaker.record_failure()
         return alive
+
+    async def probe_strict(self) -> ProbeState:
+        """Phase 3.1 strict probe: PING + MODULE LIST (catches redislite zombie).
+
+        A bare redis-server (e.g. redislite orphan) responds to PING with
+        +PONG but has no falkordb module loaded. ``probe()`` would report
+        ALIVE on PING alone, then Graphiti queries fail with
+        "unknown command GRAPH.QUERY". ``probe_strict()`` adds a MODULE LIST
+        check so only falkordb-loaded Redis reports ALIVE.
+
+        Does NOT update breaker (used for boot-time diagnostics, not for
+        the runtime failure counter). If you want to count this as a
+        failure, call ``record_failure()`` manually on DEAD.
+
+        Returns:
+            ALIVE      — PING +PONG AND MODULE LIST contains ``falkordb``
+            WARMING_UP — PING -LOADING (Redis hydrating from disk)
+            DEAD       — connection refused, timeout, PONG missing,
+                         OR MODULE LIST missing ``falkordb`` (redislite zombie)
+        """
+        timeout = float(
+            getattr(self._circuit_cfg, "probe_timeout_sec", _DEFAULT_PROBE_TIMEOUT_SEC)
+        )
+        # Step 1: PING (cheap, <1ms typical). If dead here, no need for MODULE LIST.
+        ping_state = await asyncio.to_thread(
+            _redis_ping, self._engine.host, int(self._engine.port), timeout
+        )
+        if ping_state is not ProbeState.ALIVE:
+            return ping_state
+        # Step 2: MODULE LIST — falkordb-loaded? (redislite zombie check)
+        has_falkordb = await asyncio.to_thread(
+            _module_list, self._engine.host, int(self._engine.port), timeout
+        )
+        if not has_falkordb:
+            logger.warning(
+                "falkordb_supervisor: probe_strict detected redislite-style "
+                "bare redis at %s:%d (PING +PONG but MODULE LIST missing "
+                "falkordb) — reporting DEAD",
+                self._engine.host, self._engine.port,
+            )
+            return ProbeState.DEAD
+        return ProbeState.ALIVE
 
     async def start(self) -> bool:
         """Attempt Falkor start (only if breaker permits).

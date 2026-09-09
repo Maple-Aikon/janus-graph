@@ -44,7 +44,7 @@ from ..pipeline.queue import EpisodeQueue
 from .cron_loop import CronLoop
 from .embedding_client import EmbeddingClient
 from .episode_queue_adapter import EpisodeQueueAdapter
-from .falkordb_supervisor import DaemonSupervisor
+from .falkordb_supervisor import DaemonSupervisor, ProbeState
 from .http_server import __version__, build_app
 from .search_engine import SearchEngine
 
@@ -186,22 +186,46 @@ async def boot(ctx: DaemonContext) -> None:
     await _check_falkordb_binary(ctx)
 
     # 1. Attach/start Falkor via supervisor (lazy attach — Option C from plan).
-    falkor_ok = await ctx.supervisor.probe()
-    if not falkor_ok:
-        logger.warning(
-            "daemon: Falkor not alive — attempting start (circuit permits)"
-        )
+    # Phase 3.1 fix: use probe_strict() (PING + MODULE LIST) so a redislite
+    # orphan that responds to PING but lacks the falkordb module is NOT
+    # mistaken for a healthy Falkor. The strict probe triggers a real
+    # ``manager.start()`` even if port 6379 is "alive" on first probe.
+    falkor_state = await ctx.supervisor.probe_strict()
+    if falkor_state is ProbeState.ALIVE:
+        logger.info("daemon: Falkor alive on first probe (PING+MODULE)")
+        # Record as breaker success so we don't carry stale OPEN state.
+        await ctx.supervisor.breaker.record_success()
+    else:
+        if falkor_state is ProbeState.WARMING_UP:
+            logger.warning(
+                "daemon: Falkor WARMING_UP (Redis -LOADING) — proceeding "
+                "in degraded mode; circuit will retry"
+            )
+        else:
+            logger.warning(
+                "daemon: Falkor not alive (state=%s) — attempting start "
+                "(binary present, circuit permits)", falkor_state.value,
+            )
         started = await ctx.supervisor.start()
         if started:
-            falkor_ok = await ctx.supervisor.probe()
-            logger.info("daemon: Falkor started OK: alive=%s", falkor_ok)
+            falkor_state2 = await ctx.supervisor.probe_strict()
+            if falkor_state2 is ProbeState.ALIVE:
+                logger.info(
+                    "daemon: Falkor boot-time auto-start OK (PING+MODULE)"
+                )
+                await ctx.supervisor.breaker.record_success()
+            else:
+                logger.warning(
+                    "daemon: Falkor start() returned True but probe_strict=%s "
+                    "— entering degraded mode", falkor_state2.value,
+                )
+                await ctx.supervisor.breaker.record_failure()
         else:
             logger.warning(
                 "daemon: Falkor start failed — entering degraded mode "
                 "(/health will return 503 until recoverable)"
             )
-    else:
-        logger.info("daemon: Falkor alive on first probe")
+            await ctx.supervisor.breaker.record_failure()
 
     # 2. Phase 3 wiring (queue + embedding + search).
     await _build_phase3_components(ctx)
