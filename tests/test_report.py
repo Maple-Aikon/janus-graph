@@ -9,6 +9,7 @@ from janus_graph.report.dispatcher import ReportDispatcher
 from janus_graph.report.sinks.file import FileSink
 from janus_graph.report.sinks.cli import CLISink
 from janus_graph.report.sinks.telegram import TelegramSink
+from janus_graph.report.sinks.pipe import PipeSink
 from janus_graph.report.sinks.webhook import WebhookSink
 from janus_graph.core.contracts import Settings, ReportSettings, CliReportSettings, TelegramReportSettings, WebhookReportSettings
 
@@ -81,7 +82,7 @@ async def test_cli_sink():
 
 @pytest.mark.asyncio
 async def test_telegram_sink_log_mode():
-    sink = TelegramSink(backend="log")
+    sink = TelegramSink()
     event = ReportEvent(kind="tg_test", severity=ReportSeverity.CRITICAL, summary="Server down!")
     await sink.emit(event)
     assert sink.name == "telegram"
@@ -89,7 +90,7 @@ async def test_telegram_sink_log_mode():
 
 @pytest.mark.asyncio
 async def test_telegram_sink_api_mode():
-    sink = TelegramSink(bot_token="test_token", chat_id="12345", backend="api")
+    sink = TelegramSink(bot_token="test_token", chat_id="12345")
     event = ReportEvent(kind="tg_api", severity=ReportSeverity.ERROR, summary="Test error")
     
     mock_response = MagicMock()
@@ -129,7 +130,7 @@ async def test_webhook_sink_emit():
 async def test_report_dispatcher(temp_dir):
     report_file = temp_dir / "dispatch_report.jsonl"
     sink = FileSink(str(report_file))
-    dispatcher = ReportDispatcher(sinks=[sink, CLISink(), TelegramSink(backend="log")])
+    dispatcher = ReportDispatcher(sinks=[sink, CLISink(), TelegramSink()])
 
     await dispatcher.emit_quick(
         kind="batch_sweep",
@@ -172,3 +173,185 @@ def test_report_dispatcher_from_settings(temp_dir):
     )
     dispatcher = ReportDispatcher.from_settings(settings)
     assert len(dispatcher.sinks) == 4
+
+# v0.6.3 — Generic PipeSink (CLI pipe for cron + dream reports).
+
+def _make_fake_script(tmp_path, body=None):
+    if body is None:
+        body = "#!/bin/bash" + chr(10) + "cat > /dev/null" + chr(10) + "exit 0" + chr(10)
+    p = tmp_path / "send_telegram.sh"
+    p.write_text(body)
+    p.chmod(0o755)
+    return p
+
+
+@pytest.mark.asyncio
+async def test_pipe_sink_invokes_subprocess(tmp_path):
+    """use_stdin=True → subprocess receives rendered text via stdin."""
+    script = _make_fake_script(tmp_path)
+    sink = PipeSink(
+        command=[str(script)],
+        extra_args=[],
+        use_stdin=True,
+        timeout_sec=10.0,
+    )
+    event = ReportEvent(
+        kind="cron_sweep",
+        severity=ReportSeverity.INFO,
+        summary="Sweep completed: 5/5 ok, 0 fail, 100 left",
+        details={"processed": 5, "succeeded": 5, "failed": 0},
+    )
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        await sink.emit(event)
+
+    assert mock_run.called
+    call_args = mock_run.call_args
+    assert call_args.args[0] == [str(script)]
+    assert "Sweep completed" in call_args.kwargs["input"]
+    assert "cron_sweep" in call_args.kwargs["input"]
+    assert call_args.kwargs["timeout"] == 10.0
+    assert call_args.kwargs["text"] is True
+
+
+@pytest.mark.asyncio
+async def test_pipe_sink_appends_extra_args(tmp_path):
+    """extra_args (e.g. --channel) should be appended after the command (not after text)."""
+    script = _make_fake_script(tmp_path)
+    sink = PipeSink(
+        command=[str(script)],
+        extra_args=["--channel"],
+        use_stdin=True,
+    )
+    event = ReportEvent(kind="dream_consolidation", severity=ReportSeverity.INFO, summary="dream done")
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        await sink.emit(event)
+
+    args = mock_run.call_args.args[0]
+    assert "--channel" in args
+    assert args == [str(script), "--channel"]
+    # Text still on stdin, not in argv
+    assert mock_run.call_args.kwargs["input"] is not None
+
+
+@pytest.mark.asyncio
+async def test_pipe_sink_no_stdin_passes_text_as_arg(tmp_path):
+    """use_stdin=False → text becomes the CLI argument before extra_args."""
+    sink = PipeSink(
+        command=["jq", "-r", ".kind"],
+        extra_args=["--raw-output"],
+        use_stdin=False,
+    )
+    event = ReportEvent(kind="test_kind", severity=ReportSeverity.INFO, summary="data")
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="test_kind", stderr="")
+        await sink.emit(event)
+
+    args = mock_run.call_args.args[0]
+    assert args[0:3] == ["jq", "-r", ".kind"]
+    assert args[-1] == "--raw-output"
+    assert "--raw-output" in args
+    text_arg = args[-2]
+    assert "test_kind" in text_arg
+    # input is None when use_stdin=False
+    assert mock_run.call_args.kwargs["input"] is None
+
+
+@pytest.mark.asyncio
+async def test_pipe_sink_command_missing_raises_init_error(tmp_path):
+    """At init time, if use_stdin=True and the binary is missing, raise FileNotFoundError."""
+    nonexistent = tmp_path / "nope.sh"
+    with pytest.raises(FileNotFoundError):
+        PipeSink(command=[str(nonexistent)], use_stdin=True)
+
+
+@pytest.mark.asyncio
+async def test_pipe_sink_command_empty_raises_value_error():
+    """Empty command list is meaningless → ValueError at init."""
+    with pytest.raises(ValueError):
+        PipeSink(command=[])
+
+
+@pytest.mark.asyncio
+async def test_pipe_sink_min_severity_filter(tmp_path):
+    """Below-min-severity events must NOT invoke subprocess.run."""
+    script = _make_fake_script(tmp_path)
+    sink = PipeSink(command=[str(script)], min_severity="warning")
+    debug_event = ReportEvent(kind="debug_tick", severity=ReportSeverity.DEBUG, summary="noise")
+
+    with patch("subprocess.run") as mock_run:
+        await sink.emit(debug_event)
+    assert not mock_run.called
+
+
+@pytest.mark.asyncio
+async def test_pipe_sink_nonzero_exit_logs_warning(tmp_path, caplog):
+    """Non-zero exit code from subprocess must log a warning, NOT raise to the caller."""
+    body = "#!/bin/bash" + chr(10) + "exit 7" + chr(10) + "echo 'something failed' >&2" + chr(10)
+    script = _make_fake_script(tmp_path, body=body)
+    sink = PipeSink(command=[str(script)], timeout_sec=5.0)
+    event = ReportEvent(kind="cron", severity=ReportSeverity.INFO, summary="x")
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger="janus_graph.report.pipe"):
+        await sink.emit(event)
+    assert "rc=" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_pipe_sink_timeout_does_not_crash(tmp_path, caplog):
+    """Subprocess timeout must log warning, NOT raise into emit() caller."""
+    body = "#!/bin/bash" + chr(10) + "sleep 5" + chr(10) + "exit 0" + chr(10)
+    script = _make_fake_script(tmp_path, body=body)
+    sink = PipeSink(command=[str(script)], timeout_sec=0.1)
+    event = ReportEvent(kind="slow", severity=ReportSeverity.INFO, summary="slow op")
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger="janus_graph.report.pipe"):
+        await sink.emit(event)
+    assert "timeout" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_pipe_sink_in_dispatcher_with_pydantic_settings(temp_dir):
+    """PipeSink must register via ReportDispatcher.from_settings(JanusSettings)."""
+    from janus_graph.config import JanusSettings, ReportConfig, ReportSinksConfig, PipeSinkConfig
+    settings = JanusSettings(
+        report=ReportConfig(
+            sinks=ReportSinksConfig(
+                pipe=PipeSinkConfig(
+                    enabled=True,
+                    command=["/bin/echo"],
+                    extra_args=["--channel"],
+                    use_stdin=True,
+                    min_severity="info",
+                ),
+            ),
+        ),
+    )
+    dispatcher = ReportDispatcher.from_settings(settings)
+    pipe_sinks = [s for s in dispatcher.sinks if isinstance(s, PipeSink)]
+    assert len(pipe_sinks) == 1
+    ps = pipe_sinks[0]
+    assert ps.command == ["/bin/echo"]
+    assert ps.extra_args == ["--channel"]
+    assert ps.use_stdin is True
+
+
+@pytest.mark.asyncio
+async def test_pipe_sink_dispatcher_skips_when_command_empty(temp_dir):
+    """If `pipe.enabled=true` but `command` is empty, dispatcher must skip."""
+    from janus_graph.config import JanusSettings, ReportConfig, ReportSinksConfig, PipeSinkConfig
+    settings = JanusSettings(
+        report=ReportConfig(
+            sinks=ReportSinksConfig(
+                pipe=PipeSinkConfig(enabled=True, command=[]),
+            ),
+        ),
+    )
+    dispatcher = ReportDispatcher.from_settings(settings)
+    assert all(not isinstance(s, PipeSink) for s in dispatcher.sinks)

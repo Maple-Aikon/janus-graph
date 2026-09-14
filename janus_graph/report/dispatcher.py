@@ -11,6 +11,7 @@ from .models import ReportEvent, ReportSeverity
 from .sinks import BaseSink
 from .sinks.cli import CLISink
 from .sinks.file import FileSink
+from .sinks.pipe import PipeSink
 from .sinks.telegram import TelegramSink
 from .sinks.webhook import WebhookSink
 
@@ -47,6 +48,26 @@ class ReportDispatcher:
                         min_severity=getattr(cfg.report.sinks.telegram, "min_severity", cfg.report.min_severity),
                     )
                 )
+            if cfg.report.sinks.pipe.enabled:
+                pipe_cfg = cfg.report.sinks.pipe
+                if not pipe_cfg.command:
+                    logger.warning(
+                        "PipeSink enabled but `command` is empty in config — skipping"
+                    )
+                else:
+                    cwd = pipe_cfg.cwd or None
+                    env = dict(pipe_cfg.env) if pipe_cfg.env else None
+                    sinks.append(
+                        PipeSink(
+                            command=list(pipe_cfg.command),
+                            extra_args=list(pipe_cfg.extra_args),
+                            use_stdin=pipe_cfg.use_stdin,
+                            timeout_sec=pipe_cfg.timeout_sec,
+                            min_severity=getattr(pipe_cfg, "min_severity", cfg.report.min_severity),
+                            cwd=cwd,
+                            env=env,
+                        )
+                    )
             if cfg.report.sinks.webhook.enabled:
                 sinks.append(
                     WebhookSink(
