@@ -20,7 +20,6 @@ logger = logging.getLogger("janus_graph.pipeline.cron")
 
 PROCESSING_TIMEOUT_SECONDS = int(os.environ.get("GRAPHITI_PROCESSING_TIMEOUT", "900"))
 WORKER_CONCURRENCY = int(os.environ.get("GRAPHITI_WORKER_CONCURRENCY", "2"))
-SWEEP_LIMIT = int(os.environ.get("GRAPHITI_SWEEP_LIMIT", "6"))
 REAPER_LIMIT = int(os.environ.get("GRAPHITI_REAPER_LIMIT", "500"))
 SWEEP_TIMEOUT_SECONDS = float(os.environ.get("GRAPHITI_SWEEP_TIMEOUT", "900.0"))
 PER_RECORD_TIMEOUT_SECONDS = float(os.environ.get("GRAPHITI_PER_RECORD_TIMEOUT", "900.0"))
@@ -38,7 +37,7 @@ async def run_cron_sweep(
     actual_batch_size = (
         batch_size
         if (batch_size is not None and batch_size > 0)
-        else (getattr(cfg.pipeline, "drain_batch_size", None) or SWEEP_LIMIT)
+        else cfg.pipeline.drain_batch_size
     )
     actual_concurrency = (
         getattr(cfg.pipeline, "worker_concurrency", None)
