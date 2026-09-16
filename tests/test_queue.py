@@ -1,14 +1,38 @@
 """Tests for SQLite WAL Episode Queue, DLQ, and retry policies."""
 
 import asyncio
-import pytest
+import os
+import sqlite3
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
+import pytest
 from janus_graph.pipeline.queue import EpisodeQueue, EpisodeRecord
 from janus_graph.pipeline.retry import (
     compute_backoff_seconds,
     should_retry,
     send_to_dlq,
 )
+
+
+def _column_names(conn, table):
+    conn.row_factory = sqlite3.Row
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _index_names(conn):
+    conn.row_factory = sqlite3.Row
+    return {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+    }
+
+
+def _tmp_dir():
+    """Workaround for pytest tmp_path ownership issue (multi-user /tmp)."""
+    return Path(tempfile.mkdtemp(prefix="jg_test_"))
 
 
 @pytest.mark.asyncio
@@ -179,10 +203,10 @@ def test_retry_policies():
     assert compute_backoff_seconds(3) == 8.0
 
     record = EpisodeRecord(id="rec1", payload={"content": "test"}, attempt_count=0)
-    
+
     # Transient error -> retryable
     assert should_retry(record, ConnectionError("Connection reset")) is True
-    
+
     # Max attempts exceeded -> not retryable
     record.attempt_count = 3
     assert should_retry(record, ConnectionError("Connection reset"), max_attempts=3) is False
@@ -190,3 +214,135 @@ def test_retry_policies():
     # Fatal type error -> not retryable
     record.attempt_count = 0
     assert should_retry(record, TypeError("Missing argument")) is False
+
+
+# --- Schema migration idempotency tests (issue: cron_sweep crash post-3a68711) ---
+
+PRE_REPLAY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS episodes (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'queued',
+    payload_json TEXT NOT NULL,
+    enqueued_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    checkpoint TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_status ON episodes(status);
+CREATE INDEX IF NOT EXISTS idx_enqueued_at ON episodes(enqueued_at);
+
+CREATE TABLE IF NOT EXISTS dead_letter (
+    episode_id TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    last_error TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL,
+    failed_at TEXT NOT NULL,
+    recovered_at TEXT,
+    recovered_attempts INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_dlq_failed_at ON dead_letter(failed_at);
+
+CREATE TABLE IF NOT EXISTS dream_runs (
+    run_id TEXT PRIMARY KEY,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL,
+    episodes_evaluated INTEGER DEFAULT 0,
+    phase_1_status TEXT DEFAULT 'SKIPPED',
+    phase_2_status TEXT DEFAULT 'PENDING',
+    phase_3_status TEXT DEFAULT 'PENDING',
+    phase_4_status TEXT DEFAULT 'PENDING',
+    error_message TEXT
+);
+"""
+
+
+def _make_pre_replay_db(tmpdir):
+    """Bootstrap a pre-3a68711 schema (no last_replay_at, no recovery indexes)."""
+    db_path = os.path.join(tmpdir, "episodes.db")
+    conn = sqlite3.connect(db_path)
+    conn.executescript(PRE_REPLAY_SCHEMA)
+    conn.execute(
+        "INSERT INTO episodes (id, payload_json, enqueued_at, created_at, updated_at)"
+        " VALUES ('pre-existing', '{}', '2026-09-16T00:00:00Z',"
+        " '2026-09-16T00:00:00Z', '2026-09-16T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_init_db_migrates_pre_replay_schema():
+    """EpisodeQueue.__init__ must idempotently add last_replay_at + 2 indexes."""
+    tmp = _tmp_dir()
+    db_path = _make_pre_replay_db(str(tmp))
+
+    # Pre-condition: pre-3a68711 schema
+    pre = sqlite3.connect(db_path)
+    assert "last_replay_at" not in _column_names(pre, "episodes")
+    pre_idx = _index_names(pre)
+    assert "idx_last_replay_at" not in pre_idx
+    assert "idx_dlq_recovered_at" not in pre_idx
+    pre.close()
+
+    # Boot EpisodeQueue → triggers _init_db_sync
+    q = EpisodeQueue(db_path=db_path)
+
+    # Post: schema advanced
+    post = sqlite3.connect(db_path)
+    cols = _column_names(post, "episodes")
+    assert "last_replay_at" in cols
+    post_idx = _index_names(post)
+    assert "idx_last_replay_at" in post_idx
+    assert "idx_dlq_recovered_at" in post_idx
+
+    # Pre-existing row must still exist (no data loss)
+    rows = post.execute("SELECT id FROM episodes WHERE id='pre-existing'").fetchall()
+    assert len(rows) == 1
+    post.close()
+
+
+def test_init_db_idempotent_on_already_migrated():
+    """Second boot must NOT raise — column exists, index exists, all no-ops."""
+    tmp = _tmp_dir()
+    db_path = _make_pre_replay_db(str(tmp))
+    q1 = EpisodeQueue(db_path=db_path)  # migrates
+    del q1
+
+    # Snapshot row count
+    pre = sqlite3.connect(db_path)
+    n_before = pre.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+    pre.close()
+
+    # Reopen — second migration must be silent
+    q2 = EpisodeQueue(db_path=db_path)
+    del q2
+
+    post = sqlite3.connect(db_path)
+    cols = _column_names(post, "episodes")
+    assert "last_replay_at" in cols
+    assert "idx_last_replay_at" in _index_names(post)
+    assert "idx_dlq_recovered_at" in _index_names(post)
+    n_after = post.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+    assert n_before == n_after
+    post.close()
+
+
+def test_init_db_fresh_db_no_op():
+    """On fresh DB, CREATE TABLE IF NOT EXISTS branches handle schema; helpers skip."""
+    tmp = _tmp_dir()
+    db_path = os.path.join(str(tmp), "fresh.db")
+    q = EpisodeQueue(db_path=db_path)
+    del q
+
+    post = sqlite3.connect(db_path)
+    cols = _column_names(post, "episodes")
+    assert "last_replay_at" in cols  # declared in SCHEMA
+    assert "idx_last_replay_at" in _index_names(post)
+    assert "idx_dlq_recovered_at" in _index_names(post)
+    post.close()

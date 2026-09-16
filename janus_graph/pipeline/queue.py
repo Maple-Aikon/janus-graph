@@ -31,9 +31,9 @@ CREATE TABLE IF NOT EXISTS episodes (
     updated_at TEXT NOT NULL,
     last_replay_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_status ON episodes(status);
-CREATE INDEX IF NOT EXISTS idx_enqueued_at ON episodes(enqueued_at);
-CREATE INDEX IF NOT EXISTS idx_last_replay_at ON episodes(last_replay_at);
+-- Indexes are created idempotently in _init_db_sync via _ensure_index_sync
+-- so we can introduce new indexes without forcing ALTER + re-CREATE INDEX
+-- on existing tables where the column has just been added.
 
 CREATE TABLE IF NOT EXISTS dead_letter (
     episode_id TEXT PRIMARY KEY,
@@ -44,8 +44,6 @@ CREATE TABLE IF NOT EXISTS dead_letter (
     recovered_at TEXT,
     recovered_attempts INTEGER
 );
-CREATE INDEX IF NOT EXISTS idx_dlq_failed_at ON dead_letter(failed_at);
-CREATE INDEX IF NOT EXISTS idx_dlq_recovered_at ON dead_letter(recovered_at);
 
 CREATE TABLE IF NOT EXISTS dream_runs (
     run_id TEXT PRIMARY KEY,
@@ -128,16 +126,47 @@ class EpisodeQueue:
         with self._get_connection() as conn:
             conn.executescript(SCHEMA)
             # Idempotent migrations for upgrades from pre-replay schema.
-            for ddl in (
-                "ALTER TABLE episodes ADD COLUMN last_replay_at TEXT",
+            # Use PRAGMA table_info guard (not try/except) so we don't rely on
+            # error-message strings and so the migration is robust to silent
+            # partial states (column present, index missing).
+            self._ensure_column_sync(conn, "episodes", "last_replay_at", "TEXT")
+            # Legacy indexes (pre-2026-09 schema) and new replay/recovery indexes.
+            for name, ddl in (
+                ("idx_status", "CREATE INDEX idx_status ON episodes(status)"),
+                ("idx_enqueued_at", "CREATE INDEX idx_enqueued_at ON episodes(enqueued_at)"),
+                ("idx_last_replay_at", "CREATE INDEX idx_last_replay_at ON episodes(last_replay_at)"),
+                ("idx_dlq_failed_at", "CREATE INDEX idx_dlq_failed_at ON dead_letter(failed_at)"),
+                ("idx_dlq_recovered_at", "CREATE INDEX idx_dlq_recovered_at ON dead_letter(recovered_at)"),
             ):
-                try:
-                    conn.execute(ddl)
-                except sqlite3.OperationalError as exc:
-                    msg = str(exc).lower()
-                    if "duplicate column" not in msg and "already exists" not in msg:
-                        raise
+                self._ensure_index_ddl_sync(conn, name, ddl)
             conn.commit()
+
+    @staticmethod
+    def _ensure_column_sync(
+        conn: sqlite3.Connection,
+        table: str,
+        column: str,
+        col_type: str,
+    ) -> None:
+        """Add `column` to `table` if absent. Idempotent."""
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        existing = {r["name"] for r in rows}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+
+    @staticmethod
+    def _ensure_index_ddl_sync(
+        conn: sqlite3.Connection,
+        index_name: str,
+        ddl: str,
+    ) -> None:
+        """Create index if absent. Idempotent. ddl should be the full CREATE INDEX statement."""
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+            (index_name,),
+        ).fetchone()
+        if row is None:
+            conn.execute(ddl)
 
     async def enqueue(
         self,
