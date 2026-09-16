@@ -17,11 +17,26 @@ Endpoints:
                         422 MIN_COSINE_OUT_OF_RANGE
                         503 FALKOR_DOWN
                         504 TRAVERSAL_TIMEOUT
+  GET  /search/memory - PR 2 / v0.5.0 — free-text recall via engine facade
+                        200 with {success, group_id, query, count, results,
+                                  elapsed_ms, degraded}
+                        400 INVALID_QUERY / INVALID_LIMIT
+                        422 DUAL_QUERY_REQUIRED
+                        429 RATE_LIMITED
+                        503 SEARCH_BACKEND_DOWN / FALKOR_DISCONNECTED
+                        500 INTERNAL_ERROR
 
 Phase 3 invariants preserved from Phase 2:
   - 503 body shape (T9): same {status, falkor_ok, circuit, daemon_version,
     queue_stats} envelope so existing clients don't break.
   - cron_loop count == 0 in daemon/__init__.py (B3 hard rule).
+
+PR 2 / v0.5.0 invariants:
+  - HTTP bind stays 127.0.0.1 (F4): enforced at site construction in
+    lifespan.py, NOT here. This module only registers routes.
+  - /search/memory shape parity with stdio MCP ``search_memory`` tool:
+    same {success, group_id, query, count, results} keys. HTTP adds
+    elapsed_ms + degraded for observability.
 """
 
 from __future__ import annotations
@@ -37,6 +52,7 @@ from .episode_queue_adapter import (
     EpisodeDuplicateError,
     LockModeError,
 )
+from .http_search_memory_handler import search_memory_handler
 from .search_engine import (
     SearchBackendError,
     SearchValidationError,
@@ -47,7 +63,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("janus_graph.daemon.http_server")
 
-__version__ = "0.4.0-phase4"
+__version__ = "0.5.0"
 
 
 def build_app(ctx: "DaemonContext") -> web.Application:
@@ -58,6 +74,7 @@ def build_app(ctx: "DaemonContext") -> web.Application:
       POST /shutdown       → shutdown_handler
       POST /episodes       → episodes_handler   (Phase 3)
       GET  /search/graph   → search_graph_handler (Phase 3.1)
+      GET  /search/memory  → search_memory_handler (PR 2 / v0.5.0)
     """
     app = web.Application()
     app["ctx"] = ctx
@@ -65,6 +82,7 @@ def build_app(ctx: "DaemonContext") -> web.Application:
     app.router.add_post("/shutdown", shutdown_handler)
     app.router.add_post("/episodes", episodes_handler)
     app.router.add_get("/search/graph", search_graph_handler)
+    app.router.add_get("/search/memory", search_memory_handler)
     return app
 
 
