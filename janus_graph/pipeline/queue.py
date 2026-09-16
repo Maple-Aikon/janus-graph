@@ -28,10 +28,12 @@ CREATE TABLE IF NOT EXISTS episodes (
     last_error TEXT,
     checkpoint TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    last_replay_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_status ON episodes(status);
 CREATE INDEX IF NOT EXISTS idx_enqueued_at ON episodes(enqueued_at);
+CREATE INDEX IF NOT EXISTS idx_last_replay_at ON episodes(last_replay_at);
 
 CREATE TABLE IF NOT EXISTS dead_letter (
     episode_id TEXT PRIMARY KEY,
@@ -43,6 +45,7 @@ CREATE TABLE IF NOT EXISTS dead_letter (
     recovered_attempts INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_dlq_failed_at ON dead_letter(failed_at);
+CREATE INDEX IF NOT EXISTS idx_dlq_recovered_at ON dead_letter(recovered_at);
 
 CREATE TABLE IF NOT EXISTS dream_runs (
     run_id TEXT PRIMARY KEY,
@@ -124,6 +127,16 @@ class EpisodeQueue:
     def _init_db_sync(self) -> None:
         with self._get_connection() as conn:
             conn.executescript(SCHEMA)
+            # Idempotent migrations for upgrades from pre-replay schema.
+            for ddl in (
+                "ALTER TABLE episodes ADD COLUMN last_replay_at TEXT",
+            ):
+                try:
+                    conn.execute(ddl)
+                except sqlite3.OperationalError as exc:
+                    msg = str(exc).lower()
+                    if "duplicate column" not in msg and "already exists" not in msg:
+                        raise
             conn.commit()
 
     async def enqueue(
@@ -408,8 +421,8 @@ class EpisodeQueue:
                 if not dlq_row:
                     return False
                 conn.execute(
-                    "UPDATE episodes SET status = 'queued', attempt_count = 0, last_error = NULL, updated_at = ? WHERE id = ?",
-                    (now, episode_id),
+                    "UPDATE episodes SET status = 'queued', attempt_count = 0, last_error = NULL, updated_at = ?, last_replay_at = ? WHERE id = ?",
+                    (now, now, episode_id),
                 )
                 conn.execute(
                     "UPDATE dead_letter SET recovered_at = ?, recovered_attempts = ? WHERE episode_id = ?",
@@ -420,6 +433,78 @@ class EpisodeQueue:
 
         async with self._write_lock:
             return await asyncio.to_thread(_sync_replay)
+
+    async def replay_dlq_batch(
+        self,
+        limit: int = 100,
+        classes: Optional[List[str]] = None,
+        min_age_sec: int = 0,
+    ) -> int:
+        """Replay up to ``limit`` DLQ rows back to queued, optionally filtered by error class.
+
+        Args:
+            limit: Maximum rows to replay in this call.
+            classes: If provided, only replay rows whose ``last_error`` contains any
+                of these substrings (case-insensitive LIKE match). E.g.
+                ``["SCHEMA_DRIFT", "TIMEOUT"]`` replays only schema-drift and
+                timeout errors, skipping budget-exceeded / 503 outages.
+            min_age_sec: Skip rows whose ``failed_at`` is more recent than this
+                many seconds ago. Set >0 to avoid re-replaying rows that just
+                landed in DLQ (let one dream cycle confirm they really need replay).
+
+        Returns:
+            Number of rows replayed.
+        """
+        now = _iso_now()
+        now_dt = datetime.now(timezone.utc)
+
+        def _sync_replay_batch() -> int:
+            with self._get_connection() as conn:
+                where_parts = ["dl.recovered_at IS NULL"]
+                params: List[Any] = []
+                if classes:
+                    class_clauses = " OR ".join(["LOWER(dl.last_error) LIKE LOWER(?)"] * len(classes))
+                    where_parts.append(f"({class_clauses})")
+                    params.extend(f"%{c}%" for c in classes)
+                if min_age_sec > 0:
+                    where_parts.append(
+                        "datetime(dl.failed_at) <= datetime(?, ? || ' seconds')"
+                    )
+                    params.extend([now, f"-{min_age_sec}"])
+                where_sql = " AND ".join(where_parts)
+
+                cur = conn.execute(
+                    f"""
+                    SELECT dl.episode_id, dl.attempt_count
+                    FROM dead_letter dl
+                    WHERE {where_sql}
+                    ORDER BY dl.failed_at ASC
+                    LIMIT ?
+                    """,
+                    params + [limit],
+                )
+                rows = cur.fetchall()
+                if not rows:
+                    return 0
+
+                replayed = 0
+                for row in rows:
+                    ep_id = row["episode_id"]
+                    prior_attempts = row["attempt_count"]
+                    conn.execute(
+                        "UPDATE episodes SET status = 'queued', attempt_count = 0, last_error = NULL, updated_at = ?, last_replay_at = ? WHERE id = ?",
+                        (now, now, ep_id),
+                    )
+                    conn.execute(
+                        "UPDATE dead_letter SET recovered_at = ?, recovered_attempts = ? WHERE episode_id = ?",
+                        (now, prior_attempts, ep_id),
+                    )
+                    replayed += 1
+                conn.commit()
+                return replayed
+
+        async with self._write_lock:
+            return await asyncio.to_thread(_sync_replay_batch)
 
     def get_record(self, episode_id: str) -> Optional[EpisodeRecord]:
         """Fetch a single episode record by ID."""

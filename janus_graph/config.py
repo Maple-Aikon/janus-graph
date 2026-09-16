@@ -77,6 +77,29 @@ class DreamConfig(BaseModel):
     force_clustering: bool = False
 
 
+class DlqReplayConfig(BaseModel):
+    """Dream Mode phase-4 DLQ replay settings.
+
+    Each dream run calls ``queue.replay_dlq_batch(limit, classes)`` which
+    requeues dead_letter rows back to ``queued`` status. Rows are filtered by
+    ``last_error`` LIKE match against ``classes`` (case-insensitive).
+
+    Defaults target the two replayable failure classes:
+      - ``SCHEMA_DRIFT`` — fixed by heuristics on 2026-09-15, safe to retry
+      - ``TIMEOUT`` — transient embed API slowness, may recover
+
+    Explicitly skipped classes:
+      - ``BUDGET_EXCEEDED`` — LiteLLM $5/day cap, won't reset until next day
+      - ``UNAVAILABLE_503`` — provider outage, retrying makes things worse
+    """
+    enabled: bool = True
+    limit: int = 100
+    classes: List[str] = Field(
+        default_factory=lambda: ["SCHEMA_DRIFT", "TIMEOUT"]
+    )
+    min_age_sec: int = 60  # don't replay rows that just landed in DLQ
+
+
 class PipelineConfig(BaseModel):
     """Pipeline and queue settings."""
     queue_db_path: str = "./data/episodes.db"
@@ -86,6 +109,7 @@ class PipelineConfig(BaseModel):
     cron_interval_min: int = 10
     drain_batch_size: int = 50
     dream: DreamConfig = Field(default_factory=DreamConfig)
+    dlq_replay: DlqReplayConfig = Field(default_factory=DlqReplayConfig)
 
 
 class HeuristicsConfig(BaseModel):

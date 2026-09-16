@@ -119,10 +119,27 @@ async def run_dream_consolidation(
     # Phase 3: True Orphan Node Pruning
     results["phase_3_orphan_pruning"] = "DONE"
 
-    # Phase 4: DLQ Auto-repair
+    # Phase 4: DLQ Auto-repair — requeue failed/aborted (cheap, on episodes table)
+    #         + DLQ batch replay (filter by class, on dead_letter table).
     try:
         repaired_count = await queue.reap_failed_or_aborted(limit=100)
         results["phase_4_dlq_repair"] = f"DONE ({repaired_count} requeued)"
+
+        # DLQ batch replay — controlled by cfg.pipeline.dlq_replay
+        dlq_cfg = getattr(cfg.pipeline, "dlq_replay", None)
+        if dlq_cfg is not None and getattr(dlq_cfg, "enabled", True):
+            replayed = await queue.replay_dlq_batch(
+                limit=getattr(dlq_cfg, "limit", 100),
+                classes=getattr(dlq_cfg, "classes", None),
+                min_age_sec=getattr(dlq_cfg, "min_age_sec", 60),
+            )
+            results["phase_4_replay_dlq_batch"] = (
+                f"DONE ({replayed} replayed, classes={getattr(dlq_cfg, 'classes', [])})"
+            )
+            if replayed > 0:
+                logger.info("dream: phase_4_replay_dlq_batch replayed=%d", replayed)
+        else:
+            results["phase_4_replay_dlq_batch"] = "SKIPPED (dlq_replay.enabled=false)"
     except Exception as err:
         results["phase_4_dlq_repair"] = f"FAILED: {err}"
 
