@@ -20,12 +20,19 @@ Phase 4 additions:
     Sweep + dream run in-process; ai_cronjob.sh janus subshells SKIP
     via /health alive-check. See janus_graph/daemon/cron_loop.py.
 
+PR 2 / v0.5.0 additions:
+  - graphiti_instance warmed on boot (F2/F6): create_graphiti_instance
+    wrapped in asyncio.wait_for(timeout=10s). On failure: log warning,
+    ctx.graphiti_instance stays None; /search/memory returns
+    503 SEARCH_BACKEND_DOWN at request time (per plan §2.1 F2).
+
 Graceful shutdown:
   - stop CronLoop tasks (Phase 4 — cancel + await drain)
   - stop accepting new HTTP requests
   - await in-flight handlers (aiohttp default)
   - close supervisor (no-op for sync manager)
   - close SearchEngine + EmbeddingClient
+  - drop graphiti_instance ref (closes Falkor driver through GC)
   - exit 0
 """
 
@@ -34,12 +41,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from aiohttp import web
 
 from ..config import HTTPSettings, JanusSettings
+from ..core.instance import create_graphiti_instance
 from ..pipeline.queue import EpisodeQueue
 from .cron_loop import CronLoop
 from .embedding_client import EmbeddingClient
@@ -49,6 +58,12 @@ from .http_server import __version__, build_app
 from .search_engine import SearchEngine
 
 logger = logging.getLogger("janus_graph.daemon.lifespan")
+
+# PR 2 / v0.5.0 F6: explicit init timeout for graphiti singleton.
+# Measured baseline (Maple's box, 2026-09-16): cold init ~1.8s, warm
+# reload ~0.4s. 10s budget tolerates 4x cold spike; if exceeded the
+# daemon logs + skips graphiti init, /search/memory returns 503.
+_GRAPHITI_INIT_TIMEOUT_SEC = 10.0
 
 
 @dataclass
@@ -61,6 +76,8 @@ class DaemonContext:
                     embedding_client (EmbeddingClient),
                     search_engine (SearchEngine).
     Phase 4 fields: cron_loop (CronLoop) — only populated when cron_enabled.
+    v0.5.0 fields: graphiti_instance (graphiti_core Graphiti singleton,
+                    warmed on boot via F6 timeout, used by /search/memory).
     """
 
     settings: JanusSettings
@@ -73,6 +90,7 @@ class DaemonContext:
     embedding_client: Optional[EmbeddingClient] = None
     search_engine: Optional[SearchEngine] = None
     cron_loop: Optional["CronLoop"] = None
+    graphiti_instance: Optional[Any] = None
     runner: Optional[web.AppRunner] = None
     site: Optional[web.BaseSite] = None
 
@@ -155,9 +173,68 @@ async def _build_phase3_components(ctx: DaemonContext) -> None:
         logger.warning("daemon: SearchEngine constructed but Falkor unreachable — "
                        "/search/graph will return 503 until Falkor recovers")
 
+    # PR 2 / v0.5.0: warm graphiti singleton for /search/memory HTTP endpoint.
+    # F2/F6 (plan review): wrap in try/except + asyncio.wait_for so a slow
+    # init or Falkor-down doesn't hang the daemon boot. On failure, leave
+    # ctx.graphiti_instance = None; the handler returns 503 at request time.
+    ctx.graphiti_instance = await _warm_graphiti_singleton(ctx)
+
+
+async def _warm_graphiti_singleton(ctx: DaemonContext) -> Optional[Any]:
+    """PR 2 / v0.5.0: instantiate graphiti-core singleton with F6 timeout.
+
+    Plan §2.1 F2 + F6: must be fail-soft. create_graphiti_instance is
+    SYNCHRONOUS (imports heavy graphiti-core modules, builds FalkorDriver,
+    OpenAIRerankerClient, etc.); we run it in to_thread + cap with
+    asyncio.wait_for to honor the boot budget.
+
+    Returns:
+        graphiti instance on success, None on any failure.
+
+    Failure modes:
+        TimeoutError        → log warning + return None
+        Exception (imports,
+         Falkor unreachable,
+         OOM)               → log warning + return None
+    """
+    started = time.monotonic()
+    try:
+        # create_graphiti_instance is sync (networkx/pydantic imports,
+        # FalkorDriver( host=, port=, database=) — all sync construction).
+        # Run in to_thread so we don't block the event loop. The timeout
+        # caps total wall clock for the whole construction.
+        instance = await asyncio.wait_for(
+            asyncio.to_thread(create_graphiti_instance, ctx.settings),
+            timeout=_GRAPHITI_INIT_TIMEOUT_SEC,
+        )
+        elapsed_ms = round((time.monotonic() - started) * 1000, 1)
+        logger.info(
+            "daemon: Graphiti singleton ready (group_id=%s, init_ms=%s)",
+            ctx.settings.graphiti.group_id, elapsed_ms,
+        )
+        return instance
+    except asyncio.TimeoutError:
+        logger.warning(
+            "daemon: Graphiti init exceeded %.1fs timeout — "
+            "/search/memory will return 503 SEARCH_BACKEND_DOWN",
+            _GRAPHITI_INIT_TIMEOUT_SEC,
+        )
+        return None
+    except Exception as e:  # noqa: BLE001 — defensive: graphiti-core raises broad
+        logger.warning(
+            "daemon: Graphiti init failed (%s: %s) — "
+            "/search/memory will return 503 SEARCH_BACKEND_DOWN",
+            type(e).__name__, e,
+        )
+        return None
+
 
 async def _shutdown_phase3_components(ctx: DaemonContext) -> None:
     """Reverse the Phase 3 init order."""
+    # PR 2 / v0.5.0: drop graphiti_instance ref FIRST so the FalkorDriver
+    # it holds can be GC'd before search_engine closes its redis pool.
+    # Order matters: graphiti → search_engine → embedding_client → queue.
+    ctx.graphiti_instance = None
     if ctx.search_engine is not None:
         await ctx.search_engine.close()
     if ctx.embedding_client is not None:
