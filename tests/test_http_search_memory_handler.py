@@ -467,3 +467,239 @@ async def test_elapsed_ms_is_positive(
     body = json.loads(resp.text)
     assert body["elapsed_ms"] >= 0  # 0 is valid for very fast mock
     assert isinstance(body["elapsed_ms"], (int, float))
+
+
+# ─── v0.5.0.1 Fix #1: 504 SEARCH_TIMEOUT on slow engine ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_engine_call_timeout_returns_504(
+    base_settings, alive_supervisor, mock_graphiti
+):
+    """v0.5.0.1 fix #1: bounded engine call. If engine_search_memory
+    hangs longer than ``_ENGINE_CALL_TIMEOUT_SEC``, return 504
+    SEARCH_TIMEOUT + Retry-After: 5 header instead of holding the
+    handler open indefinitely (Falkor disconnect mid-call scenario).
+    """
+    import asyncio
+
+    ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
+
+    async def _stuck_engine(*args, **kwargs):
+        # Sleep longer than the 8s handler budget. We patch the
+        # ``asyncio.wait_for`` call to use a tighter timeout so the
+        # test finishes quickly.
+        await asyncio.sleep(60.0)
+        return {"success": True, "group_id": "g", "query": "x",
+                "count": 0, "results": []}
+
+    # Patch the module constant to a tiny value so the test runs fast.
+    with patch(
+        "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
+        new=AsyncMock(side_effect=_stuck_engine),
+    ), patch(
+        "janus_graph.daemon.http_search_memory_handler._ENGINE_CALL_TIMEOUT_SEC",
+        0.05,  # 50ms — fast test
+    ):
+        req = _make_request(ctx, "query=Thuy%20Vi")
+        resp = await search_memory_handler(req)
+
+    assert resp.status == 504
+    body = json.loads(resp.text)
+    assert body["code"] == "SEARCH_TIMEOUT"
+    assert "elapsed_ms" in body
+    assert resp.headers.get("Retry-After") == "5"
+
+
+# ─── v0.5.0.1 Fix #4: typed engine code maps to status ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_engine_code_falkor_disconnected_maps_to_503(
+    base_settings, alive_supervisor, mock_graphiti
+):
+    """v0.5.0.1 fix #4: handler prefers ``code`` field over substring
+    match. Engine emits ``code="FALKOR_DISCONNECTED"`` → handler
+    maps to 503 even when ``error`` string doesn't contain the
+    legacy magic tokens.
+    """
+    ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
+    engine_response = {
+        "success": False,
+        "code": "FALKOR_DISCONNECTED",
+        "error": "graphiti_core transport failure (no magic word)",
+        "error_type": "ConnectionError",
+        "group_id": "graphiti_memory",
+        "query": "Thuy Vi",
+    }
+    with patch(
+        "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
+        new=AsyncMock(return_value=engine_response),
+    ):
+        req = _make_request(ctx, "query=Thuy%20Vi")
+        resp = await search_memory_handler(req)
+    assert resp.status == 503
+    body = json.loads(resp.text)
+    assert body["code"] == "FALKOR_DISCONNECTED"
+    # Handler surfaces engine ``error`` field as ``message``
+    assert body["message"] == "graphiti_core transport failure (no magic word)"
+
+
+@pytest.mark.asyncio
+async def test_engine_code_backend_timeout_maps_to_504(
+    base_settings, alive_supervisor, mock_graphiti
+):
+    """v0.5.0.1 fix #4: engine code BACKEND_TIMEOUT → 504."""
+    ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
+    engine_response = {
+        "success": False,
+        "code": "BACKEND_TIMEOUT",
+        "error": "graphiti_search exceeded 30s",
+        "error_type": "TimeoutError",
+        "group_id": "graphiti_memory",
+        "query": "Thuy Vi",
+    }
+    with patch(
+        "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
+        new=AsyncMock(return_value=engine_response),
+    ):
+        req = _make_request(ctx, "query=Thuy%20Vi")
+        resp = await search_memory_handler(req)
+    assert resp.status == 504
+    body = json.loads(resp.text)
+    assert body["code"] == "SEARCH_TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_engine_code_internal_error_maps_to_500(
+    base_settings, alive_supervisor, mock_graphiti
+):
+    """v0.5.0.1 fix #4: engine code INTERNAL_ERROR → 500."""
+    ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
+    engine_response = {
+        "success": False,
+        "code": "INTERNAL_ERROR",
+        "error": "graphiti_core raised SomethingWeird",
+        "error_type": "ValueError",
+        "group_id": "graphiti_memory",
+        "query": "Thuy Vi",
+    }
+    with patch(
+        "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
+        new=AsyncMock(return_value=engine_response),
+    ):
+        req = _make_request(ctx, "query=Thuy%20Vi")
+        resp = await search_memory_handler(req)
+    assert resp.status == 500
+    body = json.loads(resp.text)
+    assert body["code"] == "INTERNAL_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_engine_substring_fallback_still_works(
+    base_settings, alive_supervisor, mock_graphiti
+):
+    """v0.5.0.1 fix #4: backward compat — if engine omits ``code``
+    but error contains 'falkor', still map to 503. Protects MCP path
+    callers (which still emit the old envelope) from regressing.
+    """
+    ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
+    engine_response = {
+        "success": False,
+        # NO code field — pre-v0.5.0.1 caller
+        "error": "FalkorDB driver connection refused",
+        "group_id": "graphiti_memory",
+        "query": "Thuy Vi",
+    }
+    with patch(
+        "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
+        new=AsyncMock(return_value=engine_response),
+    ):
+        req = _make_request(ctx, "query=Thuy%20Vi")
+        resp = await search_memory_handler(req)
+    assert resp.status == 503
+    body = json.loads(resp.text)
+    assert body["code"] == "FALKOR_DISCONNECTED"
+
+
+# ─── v0.5.0.1 Fix #5: degraded field is honest (always False in 0.5.0) ──
+
+
+@pytest.mark.asyncio
+async def test_success_response_degraded_is_false_documented(
+    base_settings, alive_supervisor, mock_graphiti
+):
+    """v0.5.0.1 fix #5: degraded key MUST be present on success and
+    MUST be the literal False in v0.5.0 (no partial-result path yet).
+    Future versions may flip this when a degraded-fallback is wired;
+    until then this acts as a tripwire.
+    """
+    ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
+    engine_response = {
+        "success": True, "group_id": "graphiti_memory",
+        "query": "Thuy Vi", "count": 1,
+        "results": [{"fact": "test", "name": "Thúy Vi",
+                     "valid_at": "", "invalid_at": ""}],
+    }
+    with patch(
+        "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
+        new=AsyncMock(return_value=engine_response),
+    ):
+        req = _make_request(ctx, "query=Thuy%20Vi")
+        resp = await search_memory_handler(req)
+    body = json.loads(resp.text)
+    assert "degraded" in body
+    assert body["degraded"] is False
+
+
+# ─── v0.5.0.1 Fix #6: rate limiter LRU eviction caps memory ─────────────
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_lru_eviction_bounds_memory():
+    """v0.5.0.1 fix #6: rate limiter MUST bound total unique IPs in
+    ``_hits`` dict. We instantiate a real ``_TokenBucket`` with a
+    tiny ``_MAX_KEYS`` (5) and hammer 20 unique IPs through it.
+    Internal ``_hits`` dict size MUST stay <= ``_MAX_KEYS + 1``
+    (the +1 is the typical race-window for the most recent insert).
+    """
+    from janus_graph.daemon.http_search_memory_handler import (
+        _TokenBucket,
+    )
+
+    bucket = _TokenBucket(max_requests=10, window_sec=60.0)
+    bucket._MAX_KEYS = 5
+    for i in range(20):
+        assert bucket.consume(f"ip_{i}", now=float(i)) is True
+    # LRU eviction: oldest IPs should be evicted from the tracking dict.
+    assert len(bucket._hits) <= bucket._MAX_KEYS + 1, (
+        f"_hits dict not bounded: {len(bucket._hits)} entries "
+        f"(cap was {bucket._MAX_KEYS}). LRU eviction did not fire."
+    )
+    # Most recent IP must still be there.
+    assert "ip_19" in bucket._hits, (
+        "Most recent key should never be evicted (used immediately)."
+    )
+    # Earliest IP MUST have been evicted (it was inserted when dict
+    # was empty, then 19 more came in).
+    assert "ip_0" not in bucket._hits, (
+        "Oldest key should be LRU-evicted when bucket is full."
+    )
+
+
+# ─── v0.5.0.1 Fix #2: F4 HTTP bind defaults to 127.0.0.1 ───────────────
+
+
+def test_httpsettings_default_host_is_loopback():
+    """v0.5.0.1 fix #2: regression test for F4. The default host MUST
+    be ``127.0.0.1`` (loopback) to prevent accidental bind to a
+    public interface. Replaces F4's comment-only assertion in
+    http_server.py with an executable tripwire.
+    """
+    from janus_graph.config import HTTPSettings
+    h = HTTPSettings()
+    assert h.host == "127.0.0.1", (
+        "F4: HTTPSettings.host default must be loopback. "
+        "Changing to 0.0.0.0 exposes the daemon to the network."
+    )
+

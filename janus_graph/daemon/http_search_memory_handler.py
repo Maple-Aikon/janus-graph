@@ -31,6 +31,7 @@ Error envelope:
   422 DUAL_QUERY_REQUIRED (only when cfg.search.diacritic_dual_query=true)
   429 RATE_LIMITED
   503 SEARCH_BACKEND_DOWN / FALKOR_DISCONNECTED / NOT_READY
+  504 SEARCH_TIMEOUT (handler-side or engine-reported BACKEND_TIMEOUT)
   500 INTERNAL_ERROR
 """
 
@@ -67,6 +68,14 @@ _DEFAULT_LIMIT = 5
 _MIN_LIMIT = 1
 _MAX_LIMIT = 50
 
+# v0.5.0.1 fix #1: bounded timeout around the engine call. Mirrors F6
+# boot-time pattern: same rationale (Falkor disconnect mid-call would
+# otherwise hang the handler forever). 8s cap > measure baseline (warm
+# graphiti_search ~2-4s; hook HTTP_BUDGET_MS=3000); < ratio that would
+# let a single slow recall exhaust aiohttp handler concurrency. TimeoutError
+# maps to 504 SEARCH_TIMEOUT (symmetric with /search/graph endpoint).
+_ENGINE_CALL_TIMEOUT_SEC = 8.0
+
 
 # ─── Rate limit state (F5) ──────────────────────────────────────────────
 
@@ -80,12 +89,53 @@ class _TokenBucket:
 
     Thread-safety: aiohttp runs handlers on a single event loop; we
     never await inside ``consume()`` so no lock is needed.
+
+    v0.5.0.1 fix #6: bounded memory for adversarial IPs. Without a cap,
+    a single attacker hitting the endpoint from a botnet could grow
+    ``_hits`` unbounded. Two guards:
+      1. ``_MAX_KEYS`` (default 10_000) — if a NEW IP arrives when the
+         dict already has this many keys, evict the OLDEST entry (LRU
+         proxy via insertion order). PicoClaw's known client surface
+         is ~10s, so 10K is a 1000x over-budget safety.
+      2. ``_maxlen`` on each deque is set to ``max_requests`` so a
+         bucket that hits cap can't grow further; the eager-evict
+         loop in ``consume()`` keeps it at exactly max_requests
+         during steady-state.
     """
+
+    # v0.5.0.1 fix #6: max distinct IPs we'll track before LRU-eviction.
+    # Conservative — actual PicoClaw hook surface is <20 IPs.
+    _MAX_KEYS = 10_000
 
     def __init__(self, max_requests: int, window_sec: float) -> None:
         self.max_requests = max_requests
         self.window_sec = window_sec
-        self._hits: Dict[str, Deque[float]] = defaultdict(deque)
+        self._hits: "Dict[str, Deque[float]]" = defaultdict(
+            lambda: deque(maxlen=max_requests)
+        )
+        # v0.5.0.1 fix #6: insertion order proxy (used by LRU eviction).
+        # We can't rely on ``_hits`` ordering because defaultdict
+        # doesn't move-to-end on access. Use a parallel ordered set.
+        self._keys_in_order: "Dict[str, None]" = {}
+
+    def _evict_oldest(self) -> None:
+        """LRU evict the oldest-inserted key. O(1) amortized.
+
+        Removes the key from BOTH the tracking dict (``_keys_in_order``)
+        AND the hits dict (``_hits``). We unconditionally drop the hits
+        deque even if it has active rate-limit state — the alternative
+        would be to leak entries (defeating the cap) or scan every key
+        for emptiness (defeating O(1)). Under adversarial load, LRU
+        eviction of an active IP is preferable to unbounded memory.
+        """
+        if not self._keys_in_order:
+            return
+        oldest_key = next(iter(self._keys_in_order))
+        del self._keys_in_order[oldest_key]
+        # Always drop from _hits — see docstring rationale. ``pop`` with
+        # default to avoid KeyError if the entry was already removed
+        # by some other path (defensive; shouldn't happen in practice).
+        self._hits.pop(oldest_key, None)
 
     def consume(self, key: str, now: float) -> bool:
         """Record a hit for ``key`` if within budget.
@@ -95,6 +145,12 @@ class _TokenBucket:
         deque. Backward-compat: this method is sync because the
         ``now`` is passed in (caller controls clock for tests).
         """
+        # v0.5.0.1 fix #6: bound the dict size. If we're at cap and
+        # this is a NEW key (not just a refresh), evict the oldest.
+        if key not in self._hits and len(self._hits) >= self._MAX_KEYS:
+            self._evict_oldest()
+        self._keys_in_order[key] = None
+
         bucket = self._hits[key]
         cutoff = now - self.window_sec
         while bucket and bucket[0] < cutoff:
@@ -107,6 +163,7 @@ class _TokenBucket:
     def reset(self) -> None:
         """Test hook: clear all per-IP state."""
         self._hits.clear()
+        self._keys_in_order.clear()
 
 
 # Module-level singleton; lifespan.py does NOT manage this (intentionally
@@ -220,8 +277,31 @@ async def search_memory_handler(request: web.Request) -> web.Response:
     # ── Delegate to engine facade (single source of truth) ────────────
     started = time.monotonic()
     try:
-        result = await engine_search_memory(
-            ctx.settings, query, limit, graphiti=graphiti,
+        # v0.5.0.1 fix #1: bounded engine call. Falkor disconnect after
+        # probe OK but before graphiti_search returns → handler would
+        # hang otherwise. 8s cap mirrors F6 boot pattern (timeout=10s).
+        # CancelledError: aiohttp auto-cancels on client disconnect; we
+        # let it propagate per F8 (test_no_speculative_cancellation_code).
+        result = await asyncio.wait_for(
+            engine_search_memory(
+                ctx.settings, query, limit, graphiti=graphiti,
+            ),
+            timeout=_ENGINE_CALL_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        elapsed_ms = round((time.monotonic() - started) * 1000, 1)
+        logger.warning(
+            "/search/memory timed out after %.1fs query=%r limit=%d",
+            _ENGINE_CALL_TIMEOUT_SEC, query, limit,
+        )
+        return web.json_response(
+            {
+                "code": "SEARCH_TIMEOUT",
+                "message": f"search exceeded {int(_ENGINE_CALL_TIMEOUT_SEC)}s budget",
+                "elapsed_ms": elapsed_ms,
+            },
+            status=504,
+            headers={"Retry-After": "5"},
         )
     except Exception as e:  # noqa: BLE001 — defensive envelope
         # Engine already catches its own errors and returns
@@ -245,9 +325,39 @@ async def search_memory_handler(request: web.Request) -> web.Response:
     # ── Map engine result → HTTP response ─────────────────────────────
     if not result.get("success"):
         # Engine returned error envelope (e.g., graphiti.search raised).
-        # The error code/message distinguishes "user fixable" vs "backend".
+        # v0.5.0.1 fix #4: prefer the typed ``code`` field over fragile
+        # substring matching on the human-readable ``error`` string.
+        # Engine contract: emit ``code`` ∈ {"FALKOR_DISCONNECTED",
+        # "BACKEND_TIMEOUT", "INTERNAL_ERROR"} — handler maps by code,
+        # not by string fragment. Old substring match kept as fallback
+        # for engine versions < v0.5.0.1 (MCP path may emit plain str).
+        elapsed_ms = round((time.monotonic() - started) * 1000, 1)
+        engine_code = result.get("code")
         err = result.get("error", "unknown")
-        # F2 detection: surface Falkor disconnects with 503 not 500.
+        if engine_code == "FALKOR_DISCONNECTED":
+            return web.json_response(
+                {
+                    "code": "FALKOR_DISCONNECTED",
+                    "message": err,
+                    "elapsed_ms": elapsed_ms,
+                },
+                status=503,
+            )
+        if engine_code == "BACKEND_TIMEOUT":
+            # Engine-level timeout (e.g., graphiti_search internal cap)
+            # → surface as 504, distinct from handler-side 504 above.
+            return web.json_response(
+                {
+                    "code": "SEARCH_TIMEOUT",
+                    "message": err,
+                    "elapsed_ms": elapsed_ms,
+                },
+                status=504,
+                headers={"Retry-After": "5"},
+            )
+        # Fallback for engine returns without ``code`` (pre-v0.5.0.1):
+        # F2 detection via string fragment. Fragile by design; will be
+        # removed once all engine callers emit the typed code.
         if any(token in err.lower() for token in ("falkor", "redis", "disconnect", "connection")):
             return web.json_response(
                 {
@@ -273,9 +383,13 @@ async def search_memory_handler(request: web.Request) -> web.Response:
         "count": result.get("count", 0),
         "results": result.get("results", []),
         "elapsed_ms": elapsed_ms,
-        # Engine doesn't expose a degraded signal yet (Falkor ping is
-        # done above at handler entry). Set to False by default; future
-        # work can plumb this from SearchEngine if needed.
+        # v0.5.0.1 fix #5: degraded is always False in v0.5.0. Falkor
+        # disconnect is REJECTED at the handler with 503 before this
+        # payload is built — there's no "partial result" path here, so
+        # the field mirrors /search/graph semantics (also always False).
+        # Future work: if we ever expose a partial-result path (e.g.,
+        # cache fallback when graphiti is alive but slow), wire this
+        # from SearchEngine; until then treat as a constant.
         "degraded": False,
     }
     return web.json_response(payload, status=200)
