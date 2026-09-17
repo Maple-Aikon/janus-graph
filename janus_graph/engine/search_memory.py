@@ -16,10 +16,14 @@ Contract:
     - Output: dict with same wire shape as MCP tool
               (success/group_id/query/count/results) OR error dict on
               exception. The caller decides whether to log/return as-is.
-    - Failure: any exception is caught and returned as ``{"success": False,
-              "error": str(e), "group_id": ..., "query": ...}``. This
-              preserves the existing MCP contract (caller logs but never
-              raises to the MCP client).
+    - Failure: any exception is caught and returned as
+              ``{"success": False, "code", "error", "error_type",
+              "group_id", "query"}``. The ``code`` field (v0.5.0.1 fix
+              #4) is one of ``FALKOR_DISCONNECTED``, ``BACKEND_TIMEOUT``,
+              ``INTERNAL_ERROR`` so callers can map to HTTP status without
+              substring-matching the human-readable error string. The
+              ``code`` field is ADDITIVE — existing MCP callers that only
+              read ``success``/``error`` are unaffected.
 """
 
 from __future__ import annotations
@@ -118,10 +122,46 @@ async def search_memory(
             "results": facts,
         }
     except Exception as e:  # noqa: BLE001 — preserve MCP wire contract
-        logger.error("search_memory error: %s", e)
+        # v0.5.0.1 fix #4: classify exception so the HTTP handler can
+        # map to status code WITHOUT substring-matching the message.
+        # Old contract: caller string-matches "falkor"/"redis" etc. —
+        # fragile, breaks on any future error message change.
+        # New contract: emit ``code`` field with one of the typed
+        # values below; handler prefers ``code`` then falls back to
+        # substring for backward compat with pre-v0.5.0.1 callers.
+        err_msg = str(e)
+        err_type = type(e).__name__
+        # Falkor disconnect / network errors: graphiti-core wraps
+        # these as ``ConnectionError``, ``RedisConnectionError``,
+        # ``OSError``, etc. The DNS-resolution / transport failure
+        # path also lands here. Source-level: any graphiti-core error
+        # whose message or type mentions falkor/redis/disconnect/
+        # connection is treated as backend-down.
+        lower_msg = err_msg.lower()
+        if any(
+            tok in lower_msg
+            for tok in ("falkor", "redis", "disconnect", "connection refused",
+                        "broken pipe", "reset by peer")
+        ) or any(
+            cls in err_type for cls in (
+                "ConnectionError", "ConnectionRefusedError",
+                "BrokenPipeError", "RedisConnectionError",
+            )
+        ):
+            code = "FALKOR_DISCONNECTED"
+        elif "timeout" in lower_msg or err_type == "TimeoutError":
+            code = "BACKEND_TIMEOUT"
+        else:
+            code = "INTERNAL_ERROR"
+        logger.error(
+            "search_memory error: type=%s code=%s msg=%s",
+            err_type, code, err_msg,
+        )
         return {
             "success": False,
-            "error": str(e),
+            "code": code,
+            "error": err_msg,
+            "error_type": err_type,
             "group_id": target_group,
             "query": query,
         }
