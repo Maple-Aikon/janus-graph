@@ -41,6 +41,7 @@ from graphiti_core.search.search_filters import (
 from graphiti_core.search.search import search as graphiti_search
 
 from ..config import JanusSettings, resolve_search_params
+from .rerank import _maybe_rerank
 
 logger = logging.getLogger("janus_graph.engine.search_memory")
 
@@ -113,6 +114,11 @@ async def search_memory(
                 "valid_at": str(getattr(edge, "valid_at", "")),
                 "invalid_at": str(getattr(edge, "invalid_at", "")),
             })
+
+        # F10: optional BGE-reranker post-MMR pass. Best-effort, never
+        # raises — degrades to the original MMR ordering on any failure
+        # (circuit OPEN, timeout, malformed response, transport error).
+        facts = await _maybe_rerank(cfg, query, facts)
 
         return {
             "success": True,

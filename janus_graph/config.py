@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Type
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -238,6 +238,46 @@ class ReportConfig(BaseModel):
     sinks: ReportSinksConfig = Field(default_factory=ReportSinksConfig)
 
 
+class RerankConfig(BaseModel):
+    """Optional BGE-reranker post-MMR pass configuration.
+
+    Wired in by ``janus_graph.engine.rerank._maybe_rerank`` (F10) and
+    consumed by ``janus_graph.engine.search_memory`` after the MMR-ranked
+    facts list is materialised. Best-effort: any failure degrades to
+    the original MMR ordering, never raises.
+
+    Circuit-breaker state (CLOSED → OPEN → HALF_OPEN) follows the
+    FalkorCircuitSettings semantics — three consecutive failures trip
+    OPEN, ``reset_timeout_sec`` later the circuit becomes HALF_OPEN and
+    one probe is allowed through.
+
+    Precedence (per JanusSettings):
+        1. environment variable  e.g. ``JANUS_SEARCH__RERANK__TIMEOUT_SEC=5.0``
+        2. YAML key              ``search.rerank.timeout_sec``
+        3. class default         see below
+    """
+
+    enabled: bool = False
+    base_url: str = "http://127.0.0.1:8083"  # llama-server bge-reranker-v2-m3
+    model_name: str = ""                      # F21: empty allowed (llama-server ignores)
+    api_key: Optional[SecretStr] = None       # F12: bearer token, redacted in logs/repr
+    timeout_sec: float = 2.0                  # F25: floor + scaled by max_candidates below
+    max_candidates: int = 20                  # F25: cap input documents (50 caused timeouts)
+    failure_threshold: int = 3                # consecutive failures → OPEN
+    reset_timeout_sec: float = 30.0           # OPEN → HALF_OPEN wait
+
+    def __repr__(self) -> str:
+        # F12: never leak api_key in logs / exceptions / pydantic repr
+        api_key_redacted = "***" if self.api_key is not None else None
+        return (
+            f"RerankConfig(enabled={self.enabled}, base_url={self.base_url!r}, "
+            f"model_name={self.model_name!r}, api_key={api_key_redacted}, "
+            f"timeout_sec={self.timeout_sec}, max_candidates={self.max_candidates}, "
+            f"failure_threshold={self.failure_threshold}, "
+            f"reset_timeout_sec={self.reset_timeout_sec})"
+        )
+
+
 class SearchConfig(BaseModel):
     """Knowledge-graph search & rerank configuration.
 
@@ -251,6 +291,11 @@ class SearchConfig(BaseModel):
     """
     sim_min_score: float = 0.6  # mirrors graphiti_core DEFAULT_MIN_SCORE
     mmr_lambda: float = 0.5     # mirrors graphiti_core DEFAULT_MMR_LAMBDA
+    # F10/F14/F26: optional BGE-reranker post-MMR pass. See RerankConfig
+    # for the circuit-breaker policy + env-binding contract. Disabled by
+    # default — must be explicitly opted in via YAML or env (the rerank
+    # HTTP backend at :8083 may not be running in all deployments).
+    rerank: RerankConfig = Field(default_factory=RerankConfig)
 
 
 class FalkorCircuitSettings(BaseModel):
