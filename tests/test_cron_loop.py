@@ -32,8 +32,20 @@ from janus_graph.daemon.cron_loop import CronLoop, _state_str
 
 @pytest.fixture
 def base_settings() -> JanusSettings:
-    """JanusSettings with cron disabled by default; tests opt-in via env."""
-    return JanusSettings()
+    """JanusSettings with cron *explicitly* disabled.
+
+    Must not be a bare ``JanusSettings()``. JanusSettings is a
+    BaseSettings and resolves a YAML from the environment via
+    ``config._resolve_default_yaml_file()``; run from the repo root that
+    finds ``config.example.yaml``, whose Phase 4 cutover seed sets
+    ``daemon.cron_enabled: true``. A bare fixture therefore asserted the
+    pydantic field default while the value actually came from ambient
+    config -- the test passed or failed depending on the directory
+    pytest was invoked from. Force the value this fixture is about.
+    """
+    s = JanusSettings()
+    s.daemon.cron_enabled = False
+    return s
 
 
 @pytest.fixture
