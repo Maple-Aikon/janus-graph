@@ -21,6 +21,16 @@ def create_graphiti_instance(settings: Optional[JanusSettings] = None) -> Any:
 
     cfg = settings or load_config()
 
+    # Anchored vendor patch: graphiti_core 0.30.1 FalkorDB edge fulltext
+    # search does a Node-By-Label-Scan per hit because of a redundant
+    # :Entity label on an edge already pinned by {uuid: rel.uuid}.
+    # Fail-soft: logs and continues if the vendor shape moved upstream.
+    # Must run before Graphiti(...) is constructed so the driver picks up
+    # the patched SearchOperations. See tests/test_falkor_edge_search_patch.py.
+    from ..heuristics.vendor_patches import apply_falkor_edge_search_patch
+
+    apply_falkor_edge_search_patch()
+
     # graphiti_core >=0.20 OpenAIGenericClient signature:
     #   (config: LLMConfig | None, cache=False, client=None, max_tokens=..., structured_output_mode='json_schema')
     # The legacy kwargs (model=, api_key=, base_url=, temperature=) no longer exist.
