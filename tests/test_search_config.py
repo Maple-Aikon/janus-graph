@@ -17,17 +17,24 @@ import pytest
 from janus_graph.config import (
     JanusSettings,
     SearchConfig,
+    resolve_reranker_min_score,
     resolve_search_params,
+)
+
+_SEARCH_ENV_KEYS = (
+    "JANUS_SEARCH__SIM_MIN_SCORE",
+    "JANUS_SEARCH__MMR_LAMBDA",
+    "JANUS_SEARCH__RERANKER_MIN_SCORE",
 )
 
 
 @pytest.fixture(autouse=True)
 def _clean_env():
     """Strip JANUS_SEARCH__* env vars before each test."""
-    for k in ("JANUS_SEARCH__SIM_MIN_SCORE", "JANUS_SEARCH__MMR_LAMBDA"):
+    for k in _SEARCH_ENV_KEYS:
         os.environ.pop(k, None)
     yield
-    for k in ("JANUS_SEARCH__SIM_MIN_SCORE", "JANUS_SEARCH__MMR_LAMBDA"):
+    for k in _SEARCH_ENV_KEYS:
         os.environ.pop(k, None)
 
 
@@ -132,3 +139,125 @@ def test_resolve_search_params_logs_warning_on_invalid(caplog):
     assert sim == pytest.approx(0.6)
     # Should have logged a warning naming the param
     assert any("sim_min_score" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# v0.4.8 — reranker_min_score (the MMR-silently-returns-nothing bug)
+# ---------------------------------------------------------------------------
+
+
+def test_search_config_reranker_min_score_default_is_negative():
+    """Default floor must be negative.
+
+    graphiti_core ships 0.0. MMR scores are
+    ``mmr_lambda*cos + (mmr_lambda-1)*max_sim``, which is negative for any
+    redundant candidate whenever mmr_lambda < 1, so a 0.0 floor filters
+    out essentially the whole result set. graphiti_core's own
+    ``maximal_marginal_relevance()`` defaults to -2.0 for the same reason.
+    """
+    sc = SearchConfig()
+    assert sc.reranker_min_score < 0, (
+        "a non-negative reranker_min_score re-arms the MMR empty-result bug"
+    )
+    assert sc.reranker_min_score == pytest.approx(-2.0)
+
+
+def test_resolve_reranker_min_score_default():
+    """No env → cfg.search default (-2.0)."""
+    assert resolve_reranker_min_score(JanusSettings()) == pytest.approx(-2.0)
+
+
+def test_resolve_reranker_min_score_yaml_overrides_default():
+    """A negative YAML value is honoured (config beats builtin default)."""
+    s = JanusSettings()
+    s.search.reranker_min_score = -1.5
+    assert resolve_reranker_min_score(s) == pytest.approx(-1.5)
+
+
+def test_resolve_reranker_min_score_env_beats_yaml():
+    """env > config."""
+    s = JanusSettings()
+    s.search.reranker_min_score = -1.5
+    os.environ["JANUS_SEARCH__RERANKER_MIN_SCORE"] = "-0.25"
+    assert resolve_reranker_min_score(s) == pytest.approx(-0.25)
+
+
+def test_resolve_reranker_min_score_accepts_full_signed_range():
+    """Negative values are legal — unlike sim_min_score/mmr_lambda [0,1]."""
+    for raw, expected in (("-2.0", -2.0), ("-0.001", -0.001), ("1.0", 1.0)):
+        os.environ["JANUS_SEARCH__RERANKER_MIN_SCORE"] = raw
+        assert resolve_reranker_min_score(JanusSettings()) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["-3.5", "5.0", "abc", "NaN", ""],
+    ids=["below_range", "above_range", "not_numeric", "nan", "blank"],
+)
+def test_resolve_reranker_min_score_fail_soft(bad):
+    """Invalid env values never raise and never return a bad number.
+
+    Note: ``JanusSettings()`` is constructed BEFORE the bad env is set,
+    because pydantic-settings raises ``ValidationError`` at instantiation
+    time (this is true of the pre-existing sim_min_score / mmr_lambda
+    fields too, not something introduced here).
+    ``resolve_reranker_min_score`` re-reads ``os.environ`` directly, so
+    the helper is what enforces the fail-soft path.
+    """
+    s = JanusSettings()
+    os.environ["JANUS_SEARCH__RERANKER_MIN_SCORE"] = bad
+    assert resolve_reranker_min_score(s) == pytest.approx(-2.0)
+
+
+def test_resolve_reranker_min_score_warns_on_zero(caplog):
+    """0.0 is in range but is the bug re-armed → warn loudly, still honour it."""
+    import logging
+
+    s = JanusSettings()
+    caplog.set_level(logging.WARNING, logger="janus_graph.config")
+    os.environ["JANUS_SEARCH__RERANKER_MIN_SCORE"] = "0"
+    with caplog.at_level(logging.WARNING):
+        got = resolve_reranker_min_score(s)
+    assert got == pytest.approx(0.0), "0 is legal; the resolver must not silently override it"
+    assert any("reranker_min_score" in r.message for r in caplog.records)
+
+
+def test_resolve_reranker_min_score_is_separate_from_search_params():
+    """resolve_search_params keeps its 2-tuple contract.
+
+    Widening it to a 3-tuple would silently break every existing
+    ``sim, mmr = resolve_search_params(cfg)`` unpack site.
+    """
+    s = JanusSettings()
+    out = resolve_search_params(s)
+    assert isinstance(out, tuple) and len(out) == 2
+
+
+def test_search_memory_pushes_floor_onto_search_config():
+    """Regression guard for the actual bug.
+
+    search_memory must assign the resolved floor onto the *top-level*
+    SearchConfig. graphiti_core's search.py:185-222 reads
+    ``config.reranker_min_score`` (not the per-entity sub-configs) and
+    forwards it straight into the reranker, so pushing sim_min_score /
+    mmr_lambda onto the sub-configs alone leaves the floor at 0 and MMR
+    returns nothing.
+    """
+    import ast
+    import inspect
+    from pathlib import Path
+
+    src = Path(inspect.getfile(JanusSettings)).parent / "engine" / "search_memory.py"
+    tree = ast.parse(src.read_text())
+
+    assigned = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and node.attr == "reranker_min_score"
+        and isinstance(node.ctx, ast.Store)
+    ]
+    targets = {ast.unparse(a) for a in assigned}
+    assert "search_config.reranker_min_score" in targets, (
+        f"search_memory never assigns the floor; found {targets or 'nothing'}"
+    )

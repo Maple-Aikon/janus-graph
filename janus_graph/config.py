@@ -251,6 +251,23 @@ class SearchConfig(BaseModel):
     """
     sim_min_score: float = 0.6  # mirrors graphiti_core DEFAULT_MIN_SCORE
     mmr_lambda: float = 0.5     # mirrors graphiti_core DEFAULT_MMR_LAMBDA
+    # MMR scores are NOT in [0,1]. The formula is
+    #   mmr_lambda * cos(query, cand) + (mmr_lambda - 1) * max_sim
+    # so with mmr_lambda < 1 the second term is negative and the score
+    # goes negative for any candidate that is redundant with an
+    # already-selected one. graphiti_core's own
+    # maximal_marginal_relevance() defaults to min_score=-2.0 for this
+    # reason, but SearchConfig.reranker_min_score defaulted to 0 and
+    # search.py hands that straight to the reranker.
+    # The empty-result bug needs BOTH a 0.0 floor AND mmr_lambda < ~0.6.
+    # Measured on this host (graphiti_memory, 292 candidates):
+    #   mmr_lambda=0.7 (live) -> scores +0.24..+0.35, so a 0.0 floor
+    #   never binds and search_memory was NOT broken in production;
+    #   mmr_lambda=0.5 (recipe default) -> scores -0.09..0.00, so a
+    #   0.0 floor drops everything.
+    # So -2.0 is defence-in-depth, NOT an outage fix. Do NOT raise it
+    # toward 0.
+    reranker_min_score: float = -2.0
 
 
 class FalkorCircuitSettings(BaseModel):
@@ -549,6 +566,55 @@ def resolve_search_params(cfg: JanusSettings) -> Tuple[float, float]:
     sim = _safe("sim_min_score", sim_raw, cfg.search.sim_min_score, 0.0, 1.0)
     mmr = _safe("mmr_lambda", mmr_raw, cfg.search.mmr_lambda, 0.0, 1.0)
     return sim, mmr
+
+
+def resolve_reranker_min_score(cfg: JanusSettings) -> float:
+    """Resolve ``search.reranker_min_score`` with fail-soft invalid-env fallback.
+
+    Deliberately a SEPARATE resolver from :func:`resolve_search_params`
+    rather than a third tuple element. That function has a 2-tuple
+    contract with several test call sites unpacking it directly; widening
+    it would be a silent breaking change for any caller that does
+    ``sim, mmr = resolve_search_params(cfg)``.
+
+    Range is ``[-2.0, 1.0]``, NOT ``[0.0, 1.0]``. MMR scores are signed
+    (see ``SearchConfig.reranker_min_score``), so a 0.0 floor here would
+    reject the only valid values a user might want to set and would
+    reproduce the very bug this field exists to fix.
+
+    Returns the effective float; falls back to ``cfg.search`` (i.e.
+    config-yaml then built-in default) on a missing/blank/non-numeric/
+    out-of-range/NaN env value.
+    """
+    raw = os.environ.get("JANUS_SEARCH__RERANKER_MIN_SCORE")
+    fallback = cfg.search.reranker_min_score
+    if raw is None or raw.strip() == "":
+        return fallback
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "search param reranker_min_score=%r is not numeric; falling back to %s",
+            raw, fallback,
+        )
+        return fallback
+    if v != v or v < -2.0 or v > 1.0:  # NaN check + range check
+        logger.warning(
+            "search param reranker_min_score=%s out of range [-2.0, 1.0]; falling back to %s",
+            v, fallback,
+        )
+        return fallback
+    if v == 0.0:
+        # In range, so it is a legal value — but it is the exact setting
+        # that silently empties the MMR result set, so it is far more
+        # likely to be a stale copy of the graphiti_core default than a
+        # deliberate choice. Warn but honour it.
+        logger.warning(
+            "search param reranker_min_score=0.0 will drop essentially every "
+            "MMR candidate (MMR scores are signed); expecting <= 0. "
+            "Set a negative floor unless you know you want this."
+        )
+    return v
 
 
 # ─── Phase 3 forward-ref resolution ────────────────────────────────────

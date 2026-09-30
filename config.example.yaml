@@ -13,7 +13,7 @@ engine:
 
 # 2. Graphiti Knowledge Graph Core & LLM
 graphiti:
-  group_id: "picoclaw_memory"
+  group_id: "graphiti_memory"
   llm:
     provider: "openai"
     model: "claude-3-5-sonnet-20241022"
@@ -130,6 +130,14 @@ report:
 search:
   sim_min_score: 0.6
   mmr_lambda: 0.5
+  # Signed MMR floor. Must be <= 0 to let MMR return anything when
+  # mmr_lambda is small: graphiti_core defaults this to 0, which filters
+  # out every candidate whose score is slightly negative. The empty-result
+  # bug needs BOTH floor=0 AND mmr_lambda < ~0.6; this file keeps the
+  # graphiti default lambda=0.5, which is exactly the failing pair, so the
+  # floor is what makes a fresh clone work. Range [-2.0, 1.0].
+  #   env: JANUS_SEARCH__RERANKER_MIN_SCORE
+  reranker_min_score: -2.0
 
 # 8. Daemon Runtime (Phase 2 PR scope — Plan #2 §4.1a, Appendix D)
 # Bound retry guard around FalkorDBServerManager: 3-state circuit-breaker

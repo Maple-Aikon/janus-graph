@@ -40,7 +40,7 @@ from graphiti_core.search.search_filters import (
 )
 from graphiti_core.search.search import search as graphiti_search
 
-from ..config import JanusSettings, resolve_search_params
+from ..config import JanusSettings, resolve_reranker_min_score, resolve_search_params
 
 logger = logging.getLogger("janus_graph.engine.search_memory")
 
@@ -87,6 +87,16 @@ async def search_memory(
                 continue
             sub_cfg.sim_min_score = sim_min_score
             sub_cfg.mmr_lambda = mmr_lambda
+
+        # v0.4.8: push the reranker floor onto the SearchConfig itself.
+        # It lives on the top-level config (not the per-entity sub-configs
+        # above) and search.py:185-222 forwards it verbatim into the
+        # reranker. Leaving it at the graphiti_core default of 0 makes the
+        # MMR edge reranker filter out essentially every candidate, because
+        # MMR scores are signed and land below 0 whenever mmr_lambda < 1.
+        # This is the single line that decides whether MMR returns
+        # anything at all — see SearchConfig.reranker_min_score.
+        search_config.reranker_min_score = resolve_reranker_min_score(cfg)
 
         search_filter = SearchFilters(
             invalid_at=[[DateFilter(comparison_operator=ComparisonOperator.is_null)]],
