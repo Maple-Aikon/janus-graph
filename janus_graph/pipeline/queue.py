@@ -495,7 +495,6 @@ class EpisodeQueue:
             Number of rows replayed.
         """
         now = _iso_now()
-        now_dt = datetime.now(timezone.utc)
 
         def _sync_replay_batch() -> int:
             with self._get_connection() as conn:

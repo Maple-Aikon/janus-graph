@@ -71,7 +71,6 @@ async def run_cron_sweep(
     dispatcher = ReportDispatcher.from_settings(cfg)
 
     start_time = time.monotonic()
-    stats_initial = queue.get_stats()
 
     # Phase 1: Reaper-first (unlock stuck processing rows)
     reaped_count = await queue.reap_stuck_processing(timeout_sec=actual_reap_timeout)
