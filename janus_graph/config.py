@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Type
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -268,6 +268,76 @@ class SearchConfig(BaseModel):
     # So -2.0 is defence-in-depth, NOT an outage fix. Do NOT raise it
     # toward 0.
     reranker_min_score: float = -2.0
+    # ── Post-hoc TRUE-cosine relevance gate (2026-10-01) ──────────────
+    # Defaults to DISABLED (None). When set, ``engine.search_memory``
+    # recomputes real cosine similarity between the query vector and each
+    # returned edge's ``fact_embedding`` and DROPS edges below this floor.
+    #
+    # Why this exists and why it is NOT just "raise sim_min_score":
+    #
+    #  1. ``sim_min_score`` only guards the COSINE arm. graphiti_core's
+    #     bm25/fulltext arm (``search.py``, edge_fulltext_search call)
+    #     passes NO min_score at all, so lexical junk queries keep pulling
+    #     unrelated edges regardless of sim_min_score.
+    #
+    #  2. FalkorDB's similarity score is NOT cosine. Its driver computes
+    #     ``(2 - cosine_distance) / 2`` == ``(1 + cos) / 2``. So a
+    #     sim_min_score of 0.6 really only demands cos >= 0.20 — a floor
+    #     that this embedding space never approaches. Calibrating against
+    #     driver scores and calibrating against cosine are different maths;
+    #     this gate is in COSINE units, explicitly.
+    #
+    #  3. The MMR reranker score is NOT a relevance score either: it is
+    #     ``mmr_lambda * cos + (mmr_lambda - 1) * max_sim`` — a relevance
+    #     and redundancy MIXTURE. Measured on this host, on-topic and
+    #     off-topic MMR distributions OVERLAP, so MMR cannot gate.
+    #     Likewise ``SearchResults.edge_reranker_scores`` holds MMR scores,
+    #     so it is unusable as a relevance signal. This gate therefore
+    #     recomputes cosine from the raw embeddings instead.
+    #
+    # Measured separation (live config, 5 on-topic + 5 off-topic queries,
+    # 500 edges, true cosine): on-topic min 0.7773 / off-topic max 0.8407.
+    # The distributions genuinely overlap, so no threshold is perfect.
+    # 0.845 is the first value where all 5 off-topic queries return zero
+    # while every on-topic query still returns results. Set it in
+    # config.yaml as ``search.cosine_gate_min`` or via
+    # ``JANUS_SEARCH__COSINE_GATE_MIN``. Range [-1.0, 1.0].
+    cosine_gate_min: Optional[float] = None
+    # Over-fetch multiplier: pull ``limit * cosine_gate_overfetch`` candidates
+    # from graphiti, gate them, then truncate back to ``limit``. Measured on
+    # this host, 2x recovers ON recall that 1x throws away (a query's true
+    # match can sit at rank 11) while 3x/5x add cost and nothing else.
+    cosine_gate_overfetch: int = 2
+
+    @field_validator("cosine_gate_min", mode="before")
+    @classmethod
+    def _coerce_cosine_gate_min(cls, v: Any) -> Any:
+        """Accept the disable-spellings and junk values as "off", never crash.
+
+        ``JanusSettings`` is a pydantic ``BaseSettings``, so an env var
+        reaches this field BEFORE any resolver runs. Without this validator a
+        typo (``JANUS_SEARCH__COSINE_GATE_MIN=off`` or ``=abc``) raises
+        ``ValidationError`` inside ``JanusSettings()`` and takes down config
+        loading for the whole process — which would make "disable the gate"
+        the most dangerous way to configure it.
+
+        Coercing here also means the resolver's fail-soft path is not the
+        only defence, which matters because pydantic populating the field
+        first would otherwise make ``cfg.search.cosine_gate_min`` echo a bad
+        env value back as the fallback.
+        """
+        if v is None or isinstance(v, (int, float)) and not isinstance(v, bool):
+            return v
+        s = str(v).strip()
+        if s == "" or s.lower() in ("none", "off", "disabled", "null"):
+            return None
+        try:
+            return float(s)
+        except (TypeError, ValueError):
+            logger.warning(
+                "search.cosine_gate_min=%r is not numeric; treating the gate as OFF", v
+            )
+            return None
 
 
 class FalkorCircuitSettings(BaseModel):
@@ -646,6 +716,101 @@ def resolve_reranker_min_score(cfg: JanusSettings) -> float:
             "MMR candidate (MMR scores are signed); expecting <= 0. "
             "Set a negative floor unless you know you want this."
         )
+    return v
+
+
+# ─── Post-hoc true-cosine relevance gate (2026-10-01) ─────────────────────
+#
+# SEPARATE resolvers rather than extra elements on resolve_search_params(): that
+# function has a 2-tuple contract with several test call sites unpacking it
+# directly, so widening it would silently break every ``sim, mmr = ...``.
+
+
+def resolve_cosine_gate_min(cfg: JanusSettings) -> Optional[float]:
+    """Resolve ``search.cosine_gate_min`` — ``None`` means DISABLED.
+
+    Returns:
+        ``None``  -> gate off, search_memory returns edges unfiltered
+                      (preserves pre-2026-10-01 behaviour exactly).
+        ``float`` -> true-cosine floor; edges scoring below it are dropped.
+
+    Range is ``[-1.0, 1.0]`` because this gate is in COSINE units, unlike
+    ``sim_min_score`` (which is compared against FalkorDB's (1+cos)/2 driver
+    score) and unlike ``reranker_min_score`` (which is a signed MMR mixture).
+    Mixing those three scales is the mistake that made the original
+    "raise sim_min_score to 0.92" recommendation wrong.
+
+    Empty string / non-numeric / out-of-range / NaN all fail soft to
+    ``cfg.search.cosine_gate_min`` (config-yaml then built-in default
+    ``None``), so a bad env var can never enable a broken gate or brick
+    search.
+    """
+    raw = os.environ.get("JANUS_SEARCH__COSINE_GATE_MIN")
+    fallback = cfg.search.cosine_gate_min
+    if raw is None or raw.strip() == "":
+        return _validated(fallback)
+    if raw.strip().lower() in ("none", "off", "disabled"):
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "search param cosine_gate_min=%r is not numeric; falling back to %r",
+            raw, fallback,
+        )
+        return _validated(fallback)
+    return _validated(v)
+
+
+def _validated(v: Optional[float]) -> Optional[float]:
+    """Range-check a cosine gate floor.
+
+    Applied to BOTH the env value and the config value on purpose.
+    ``JanusSettings`` is a pydantic ``BaseSettings``, so
+    ``JANUS_SEARCH__COSINE_GATE_MIN`` populates ``cfg.search.cosine_gate_min``
+    directly. If the env value is out of range, the naive
+    "fall back to cfg" would fall back to *that same bad value* and return
+    it, logging "falling back" while honouring the bad input. Validating the
+    fallback too closes that hole.
+    """
+    if v is None:
+        return None
+    if v != v or v < -1.0 or v > 1.0:  # NaN check + range check
+        logger.warning(
+            "search param cosine_gate_min=%s out of range [-1.0, 1.0]; "
+            "disabling the gate",
+            v,
+        )
+        return None
+    return v
+
+
+def resolve_cosine_gate_overfetch(cfg: JanusSettings) -> int:
+    """Resolve ``search.cosine_gate_overfetch`` with fail-soft fallback.
+
+    Must be >= 1; 1 means "gate exactly the caller's limit" (no over-fetch,
+    so any true match ranked below ``limit`` is lost). Values above ~3
+    cost more embedding round-trips without measurably improving results on
+    this host, so the accepted range is [1, 10].
+    """
+    raw = os.environ.get("JANUS_SEARCH__COSINE_GATE_OVERFETCH")
+    fallback = cfg.search.cosine_gate_overfetch
+    if raw is None or raw.strip() == "":
+        return fallback
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "search param cosine_gate_overfetch=%r is not an integer; falling back to %s",
+            raw, fallback,
+        )
+        return fallback
+    if v < 1 or v > 10:
+        logger.warning(
+            "search param cosine_gate_overfetch=%s out of range [1, 10]; falling back to %s",
+            v, fallback,
+        )
+        return fallback
     return v
 
 
