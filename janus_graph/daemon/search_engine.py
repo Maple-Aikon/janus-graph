@@ -369,7 +369,15 @@ class SearchEngine:
                 if isinstance(result, list) and len(result) >= 2 and result[1]:
                     existing.append(name)
             except Exception as e:
-                logger.debug("seed probe failed for %s: %s", name, e)
+                # Do NOT swallow this. An empty ``existing`` is read by the
+                # caller as "seed absent" -> HTTP 404 SEED_NOT_FOUND, which
+                # tells the client to fix a query that is actually fine and
+                # blames their seed name for a dead database. Re-raise through
+                # the same classifier _cypher_bfs uses, so a transport failure
+                # reads FALKOR_DOWN (503) and a query-text defect reads
+                # INVALID_CYPHER (400, no circuit-breaker impact) -- see
+                # _classify_cypher_error for why the split matters.
+                raise _classify_cypher_error(e) from e
         return existing
 
     async def _cypher_bfs(self, req: Dict[str, Any]) -> List[FactRow]:
