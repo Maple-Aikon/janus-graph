@@ -6,7 +6,8 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Type
+
 import yaml
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import (
@@ -15,6 +16,16 @@ from pydantic_settings import (
     SettingsConfigDict,
     YamlConfigSettingsSource,
 )
+
+if TYPE_CHECKING:
+    # Imported for type checkers only. At runtime these two names are bound
+    # explicitly by ``_bind_phase3_forward_refs()`` via model_rebuild(
+    # _types_namespace=...) -- importing them eagerly would drag in
+    # janus_graph.daemon (and aiohttp) for config-only callers.
+    from janus_graph.daemon.phase3_settings import (
+        DaemonLockSettings,
+        DaemonSearchGraphSettings,
+    )
 
 logger = logging.getLogger("janus_graph.config")
 
