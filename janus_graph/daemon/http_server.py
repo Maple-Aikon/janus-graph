@@ -299,14 +299,13 @@ async def episodes_handler(request: web.Request) -> web.Response:
 async def search_graph_handler(request: web.Request) -> web.Response:
     """GET /search/graph — BFS + cosine + MMR structural search.
 
-    Query params (all JSON-encoded in body — we accept POST-style body too
-    for ergonomics with hooks that POST JSON):
-      seed_entities: list[str]   required, 1-5 entries
+    GET only. Query params:
+      seed_entities: list[str]   required, 1-5 entries (comma-separated)
       max_hops:      int         required, 1-3
       min_cosine:    float       optional
       mmr_lambda:    float       optional
       limit:         int         optional
-      edge_types:    list[str]   optional
+      edge_types:    list[str]   optional (comma-separated)
       include_episodes: bool     optional
       query:         str         optional (defaults to first seed)
 
@@ -333,47 +332,46 @@ async def search_graph_handler(request: web.Request) -> web.Response:
             status=503,
         )
 
-    # Accept both GET query string and POST body. For GET (the documented
-    # verb in the plan), parse query string into the dict shape.
-    if request.method == "GET":
-        payload: Dict[str, Any] = {}
-        for key in (
-            "seed_entities",
-            "max_hops",
-            "min_cosine",
-            "mmr_lambda",
-            "limit",
-            "edge_types",
-            "include_episodes",
-            "query",
-        ):
-            raw = request.query.get(key)
-            if raw is None:
-                continue
-            if key == "seed_entities" or key == "edge_types":
-                # Comma-separated for ergonomics (?seed_entities=a,b,c).
-                payload[key] = [s.strip() for s in raw.split(",") if s.strip()]
-            elif key in ("max_hops", "limit"):
-                try:
-                    payload[key] = int(raw)
-                except ValueError:
-                    return web.json_response(
-                        {"code": "INVALID_BODY", "message": f"{key} must be int"},
-                        status=400,
-                    )
-            elif key == "include_episodes":
-                payload[key] = raw.lower() in ("1", "true", "yes")
-            else:
-                payload[key] = raw
-    else:
-        # POST variant for hooks / clients that prefer JSON body.
-        try:
-            payload = await request.json()
-        except Exception as e:
-            return web.json_response(
-                {"code": "INVALID_BODY", "message": f"malformed JSON: {e}"},
-                status=422,
-            )
+    # GET query string only — this route is registered with ``add_get`` and has
+    # never had a POST sibling, so a JSON body branch here was unreachable
+    # dead code (and its "POST variant" comment was actively misleading:
+    # it read as a supported transport that did not exist).
+    #
+    # Consequence worth knowing: params arrive as raw strings, so a query
+    # string can never deliver a Python ``bool`` into the payload. The
+    # ``isinstance(x, bool)`` guards in ``SearchEngine.validate_request``
+    # are therefore HTTP-unreachable. They stay — the engine is a library
+    # and direct (non-HTTP) callers can still pass a real bool — but do not
+    # expect a live HTTP probe to exercise them.
+    payload: Dict[str, Any] = {}
+    for key in (
+        "seed_entities",
+        "max_hops",
+        "min_cosine",
+        "mmr_lambda",
+        "limit",
+        "edge_types",
+        "include_episodes",
+        "query",
+    ):
+        raw = request.query.get(key)
+        if raw is None:
+            continue
+        if key == "seed_entities" or key == "edge_types":
+            # Comma-separated for ergonomics (?seed_entities=a,b,c).
+            payload[key] = [s.strip() for s in raw.split(",") if s.strip()]
+        elif key in ("max_hops", "limit"):
+            try:
+                payload[key] = int(raw)
+            except ValueError:
+                return web.json_response(
+                    {"code": "INVALID_BODY", "message": f"{key} must be int"},
+                    status=400,
+                )
+        elif key == "include_episodes":
+            payload[key] = raw.lower() in ("1", "true", "yes")
+        else:
+            payload[key] = raw
 
     # Set default query to first seed if not provided (used by cosine step).
     if "query" not in payload:

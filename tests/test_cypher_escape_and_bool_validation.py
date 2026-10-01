@@ -15,12 +15,20 @@ BUG #2 — validate_request accepted JSON ``true`` as a number.
   ``bool`` subclasses ``int`` in Python, so ``max_hops: true`` passed the
   int check and became hops=1, ``min_cosine: true`` became 1.0 and
   rejected every real result, ``mmr_lambda: true`` became 1.0 and disabled
-  MMR diversity. Only reachable over POST (GET coerces via int()).
+  MMR diversity.
+
+  Reachability caveat (verified 2026-10-01 against the live daemon):
+  ``/search/graph`` is registered with ``add_get`` ONLY, and its GET
+  parser hands values over as raw strings — so a query string can never
+  deliver a Python ``bool`` into the payload. The unreachable POST body
+  branch was removed, which means **no HTTP route can reach these guards
+  today**. They are kept because ``SearchEngine`` is a library and direct
+  (non-HTTP) callers can still pass a real bool. Do not expect a live
+  HTTP probe to exercise this section.
 
 Pure unit tests — no live FalkorDB, no network. The live round-trip
 evidence that motivated this fix is recorded in the docstring of
-``_escape_cypher_string`` and re-verified by tests/test_cypher_escape_live.py
-(manual, opt-in).
+``_escape_cypher_string``.
 """
 import pytest
 
