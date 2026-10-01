@@ -61,3 +61,18 @@ exclude = [
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests are allowed to import a symbol purely to assert it still exists or to
+# freeze an interface contract (tests/test_contracts.py imports 12 dataclasses
+# and references none of them -- that IS the test). `ruff check --fix` would
+# delete those imports and silently gut the assertion, so these are suppressed
+# as POLICY rather than fixed as code.
+#
+# The same reasoning covers F841: a local assigned but never read is sometimes
+# the whole point (binding the result of a call that must not raise).
+#
+# I001 is listed for durability -- the suite is sorted today, and if a future
+# edit leaves an unsorted import in a fixture or conftest the intent is to keep
+# it, not to churn the file.
+"tests/**" = ["F401", "F841", "I001"]
