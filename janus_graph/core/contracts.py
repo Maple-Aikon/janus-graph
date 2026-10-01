@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 # Settings dataclasses (frozen snapshots)
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class QueueSettings:
     sqlite_busy_timeout_ms: int = 5000
@@ -41,7 +42,12 @@ class DreamSettings:
 class PipelineSettings:
     queue: QueueSettings = QueueSettings()
     dream: DreamSettings = DreamSettings()
-    heuristics_active: tuple[str, ...] = ("edge_duplicate", "extracted_edges", "extracted_entities", "node_resolutions")
+    heuristics_active: tuple[str, ...] = (
+        "edge_duplicate",
+        "extracted_edges",
+        "extracted_entities",
+        "node_resolutions",
+    )
 
 
 @dataclass(frozen=True)
@@ -120,6 +126,7 @@ class PathsSettings:
 @dataclass(frozen=True)
 class Settings:
     """Frozen snapshot of config.yaml. Phase 2/3 must not mutate."""
+
     pipeline: PipelineSettings = PipelineSettings()
     report: ReportSettings = ReportSettings()
     llm: LLMSettings = LLMSettings()
@@ -132,9 +139,11 @@ class Settings:
 # Events dataclasses
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class RepairEvent:
     """Emitted by heuristics, consumed by report. Frozen shape."""
+
     rule_name: str
     target_model: str
     episode_id: str
@@ -148,6 +157,7 @@ class RepairEvent:
 @dataclass(frozen=True)
 class DreamEvent:
     """Emitted by Dream Mode, consumed by report."""
+
     phase: str  # "clustering" | "dedup" | "prune" | "repair"
     nodes_before: int
     nodes_after: int
@@ -159,6 +169,7 @@ class DreamEvent:
 # ---------------------------------------------------------------------------
 # Protocols / Interfaces
 # ---------------------------------------------------------------------------
+
 
 @runtime_checkable
 class QuirksLogger(Protocol):
@@ -180,17 +191,23 @@ class QuirksLogger(Protocol):
 @runtime_checkable
 class RepairRule(Protocol):
     """Pluggable repair rule. Phase 2 implements these. Phase 3 reports when fired."""
+
     name: str
     target_model: str
     priority: int
 
-    def can_repair(self, schema_name: str, payload: Any, error: Optional[Exception] = None) -> bool: ...
-    def repair(self, schema_name: str, payload: Any, error: Optional[Exception] = None) -> dict[str, Any]: ...
+    def can_repair(
+        self, schema_name: str, payload: Any, error: Optional[Exception] = None
+    ) -> bool: ...
+    def repair(
+        self, schema_name: str, payload: Any, error: Optional[Exception] = None
+    ) -> dict[str, Any]: ...
 
 
 @runtime_checkable
 class ReportSink(Protocol):
     """Phase 3 implements these. Phase 2 does not import directly."""
+
     name: str
 
     async def dispatch(self, event: dict[str, Any], settings: Settings) -> None: ...

@@ -30,6 +30,7 @@ Pure unit tests — no live FalkorDB, no network. The live round-trip
 evidence that motivated this fix is recorded in the docstring of
 ``_escape_cypher_string``.
 """
+
 import pytest
 
 from janus_graph.daemon.search_engine import (
@@ -101,9 +102,7 @@ class TestEscaping:
 
 class TestErrorClassification:
     def test_parse_error_becomes_invalid_cypher_not_503(self):
-        err = _classify_cypher_error(
-            Exception("errMsg: Invalid input " + Q + ": expected " + Q)
-        )
+        err = _classify_cypher_error(Exception("errMsg: Invalid input " + Q + ": expected " + Q))
         assert err.code == "INVALID_CYPHER"
         assert err.code != "FALKOR_DOWN"
 

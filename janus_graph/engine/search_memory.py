@@ -106,18 +106,17 @@ async def _apply_cosine_gate(
             input_data=[query.replace(chr(10), " ")]
         )
     if not query_vector:
-        logger.warning(
-            "cosine gate: empty query vector; returning %d edges ungated", len(edges)
-        )
+        logger.warning("cosine gate: empty query vector; returning %d edges ungated", len(edges))
         return edges[:limit]
 
     try:
         embeddings = await get_embeddings_for_edges(graphiti.clients.driver, edges)
     except Exception as e:  # noqa: BLE001 — gate must never break search
         logger.warning(
-            "cosine gate: could not load edge embeddings (%s: %s); "
-            "returning %d edges ungated",
-            type(e).__name__, e, len(edges),
+            "cosine gate: could not load edge embeddings (%s: %s); returning %d edges ungated",
+            type(e).__name__,
+            e,
+            len(edges),
         )
         return edges[:limit]
 
@@ -140,11 +139,14 @@ async def _apply_cosine_gate(
     if unscorable:
         logger.info(
             "cosine gate: dropped %d/%d edges with missing fact_embedding",
-            unscorable, len(edges),
+            unscorable,
+            len(edges),
         )
     logger.info(
         "cosine gate: floor=%.4f kept=%d/%d edges",
-        gate_min, len(kept), len(edges),
+        gate_min,
+        len(kept),
+        len(edges),
     )
     return kept[:limit]
 
@@ -256,12 +258,14 @@ async def search_memory(
 
         facts: list[Dict[str, str]] = []
         for edge in edges:
-            facts.append({
-                "fact": getattr(edge, "fact", str(edge)),
-                "name": getattr(edge, "name", ""),
-                "valid_at": str(getattr(edge, "valid_at", "")),
-                "invalid_at": str(getattr(edge, "invalid_at", "")),
-            })
+            facts.append(
+                {
+                    "fact": getattr(edge, "fact", str(edge)),
+                    "name": getattr(edge, "name", ""),
+                    "valid_at": str(getattr(edge, "valid_at", "")),
+                    "invalid_at": str(getattr(edge, "invalid_at", "")),
+                }
+            )
 
         return {
             "success": True,
@@ -289,12 +293,21 @@ async def search_memory(
         lower_msg = err_msg.lower()
         if any(
             tok in lower_msg
-            for tok in ("falkor", "redis", "disconnect", "connection refused",
-                        "broken pipe", "reset by peer")
+            for tok in (
+                "falkor",
+                "redis",
+                "disconnect",
+                "connection refused",
+                "broken pipe",
+                "reset by peer",
+            )
         ) or any(
-            cls in err_type for cls in (
-                "ConnectionError", "ConnectionRefusedError",
-                "BrokenPipeError", "RedisConnectionError",
+            cls in err_type
+            for cls in (
+                "ConnectionError",
+                "ConnectionRefusedError",
+                "BrokenPipeError",
+                "RedisConnectionError",
             )
         ):
             code = "FALKOR_DISCONNECTED"
@@ -304,7 +317,9 @@ async def search_memory(
             code = "INTERNAL_ERROR"
         logger.error(
             "search_memory error: type=%s code=%s msg=%s",
-            err_type, code, err_msg,
+            err_type,
+            code,
+            err_msg,
         )
         return {
             "success": False,

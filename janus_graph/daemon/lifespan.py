@@ -112,12 +112,10 @@ async def _check_falkordb_binary(ctx: DaemonContext) -> None:
     except Exception as e:
         # If resolve_binary_paths itself fails (rare) — also disable.
         logger.warning(
-            "daemon: falkordb binary resolve failed (%s) — "
-            "restart policy disabled", e,
+            "daemon: falkordb binary resolve failed (%s) — restart policy disabled",
+            e,
         )
-        ctx.supervisor.restart_policy.disable(
-            reason=f"binary_resolve_failed:{e}"
-        )
+        ctx.supervisor.restart_policy.disable(reason=f"binary_resolve_failed:{e}")
         return
 
     if not falkordb_module.exists():
@@ -127,9 +125,7 @@ async def _check_falkordb_binary(ctx: DaemonContext) -> None:
             "Restore the binary then `pmc restart janus-graph-daemon`.",
             falkordb_module,
         )
-        ctx.supervisor.restart_policy.disable(
-            reason=f"binary_missing:{falkordb_module}"
-        )
+        ctx.supervisor.restart_policy.disable(reason=f"binary_missing:{falkordb_module}")
         return
 
     logger.info(
@@ -152,14 +148,19 @@ async def _build_phase3_components(ctx: DaemonContext) -> None:
         lock_settings=ctx.settings.daemon.lock,
     )
     await ctx.queue_adapter.start()
-    logger.info("daemon: EpisodeQueueAdapter ready (db=%s, mode=%s)",
-                queue_path, ctx.settings.daemon.lock.mode)
+    logger.info(
+        "daemon: EpisodeQueueAdapter ready (db=%s, mode=%s)",
+        queue_path,
+        ctx.settings.daemon.lock.mode,
+    )
 
     ctx.embedding_client = EmbeddingClient(ctx.settings.daemon.search_graph)
     await ctx.embedding_client.start()
-    logger.info("daemon: EmbeddingClient ready (url=%s, conc=%d)",
-                ctx.settings.daemon.search_graph.embedding_base_url,
-                ctx.settings.daemon.search_graph.embedding_concurrency)
+    logger.info(
+        "daemon: EmbeddingClient ready (url=%s, conc=%d)",
+        ctx.settings.daemon.search_graph.embedding_base_url,
+        ctx.settings.daemon.search_graph.embedding_concurrency,
+    )
 
     ctx.search_engine = SearchEngine(
         engine_config=ctx.settings.engine,
@@ -170,8 +171,10 @@ async def _build_phase3_components(ctx: DaemonContext) -> None:
     if ctx.search_engine._redis is not None:
         logger.info("daemon: SearchEngine ready (redis connected)")
     else:
-        logger.warning("daemon: SearchEngine constructed but Falkor unreachable — "
-                       "/search/graph will return 503 until Falkor recovers")
+        logger.warning(
+            "daemon: SearchEngine constructed but Falkor unreachable — "
+            "/search/graph will return 503 until Falkor recovers"
+        )
 
     # PR 2 / v0.5.0: warm graphiti singleton for /search/memory HTTP endpoint.
     # F2/F6 (plan review): wrap in try/except + asyncio.wait_for so a slow
@@ -210,7 +213,8 @@ async def _warm_graphiti_singleton(ctx: DaemonContext) -> Optional[Any]:
         elapsed_ms = round((time.monotonic() - started) * 1000, 1)
         logger.info(
             "daemon: Graphiti singleton ready (group_id=%s, init_ms=%s)",
-            ctx.settings.graphiti.group_id, elapsed_ms,
+            ctx.settings.graphiti.group_id,
+            elapsed_ms,
         )
         return instance
     except asyncio.TimeoutError:
@@ -224,7 +228,8 @@ async def _warm_graphiti_singleton(ctx: DaemonContext) -> Optional[Any]:
         logger.warning(
             "daemon: Graphiti init failed (%s: %s) — "
             "/search/memory will return 503 SEARCH_BACKEND_DOWN",
-            type(e).__name__, e,
+            type(e).__name__,
+            e,
         )
         return None
 
@@ -281,20 +286,20 @@ async def boot(ctx: DaemonContext) -> None:
         else:
             logger.warning(
                 "daemon: Falkor not alive (state=%s) — attempting start "
-                "(binary present, circuit permits)", falkor_state.value,
+                "(binary present, circuit permits)",
+                falkor_state.value,
             )
         started = await ctx.supervisor.start()
         if started:
             falkor_state2 = await ctx.supervisor.probe_strict()
             if falkor_state2 is ProbeState.ALIVE:
-                logger.info(
-                    "daemon: Falkor boot-time auto-start OK (PING+MODULE)"
-                )
+                logger.info("daemon: Falkor boot-time auto-start OK (PING+MODULE)")
                 await ctx.supervisor.breaker.record_success()
             else:
                 logger.warning(
                     "daemon: Falkor start() returned True but probe_strict=%s "
-                    "— entering degraded mode", falkor_state2.value,
+                    "— entering degraded mode",
+                    falkor_state2.value,
                 )
                 await ctx.supervisor.breaker.record_failure()
         else:
@@ -327,8 +332,7 @@ async def boot(ctx: DaemonContext) -> None:
     await ctx.site.start()
     cron_state = "ENABLED — Phase 4" if ctx.cron_loop.running else "disabled — Phase 4 gate off"
     logger.info(
-        "daemon: ready on port %d (cron %s) "
-        "— http://%s:%d/health",
+        "daemon: ready on port %d (cron %s) — http://%s:%d/health",
         ctx.http_settings.port,
         cron_state,
         ctx.http_settings.host,

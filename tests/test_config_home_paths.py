@@ -189,9 +189,7 @@ def test_deep_dotted_path_rewrites_leaf_and_preserves_parent_identity(tmp_path):
 
     _apply_home_relative_paths(cfg, tmp_path)
 
-    assert cfg.report.sinks.file.path == str(
-        (tmp_path / "logs" / "report.jsonl").resolve()
-    )
+    assert cfg.report.sinks.file.path == str((tmp_path / "logs" / "report.jsonl").resolve())
     assert cfg.report.sinks is sinks_before
     assert cfg.report.sinks.file is file_node_before
 
@@ -442,9 +440,7 @@ def test_all_seven_home_relative_fields_are_covered(tmp_path):
 # ─── pass 2 honours the same absoluteness decision as pass 1 ───────────
 
 
-def test_absolute_path_is_not_created_after_being_skipped_by_rewrite(
-    tmp_path, monkeypatch
-):
+def test_absolute_path_is_not_created_after_being_skipped_by_rewrite(tmp_path, monkeypatch):
     """Operator-pinned absolute paths are off-limits to BOTH passes.
 
     Pass 1 skips an absolute value (leaves it pinned) and records the field
@@ -487,9 +483,7 @@ def test_mkdir_still_runs_for_rewritten_fields(tmp_path):
     _apply_home_relative_paths(cfg, tmp_path)
 
     # Values are home-rewritten (hence absolute)...
-    assert cfg.pipeline.queue_db_path == str(
-        (tmp_path / "queue" / "episodes.db").resolve()
-    )
+    assert cfg.pipeline.queue_db_path == str((tmp_path / "queue" / "episodes.db").resolve())
     # ...yet their parents are still created.
     assert (tmp_path / "queue").is_dir()
     assert (tmp_path / "logs").is_dir()

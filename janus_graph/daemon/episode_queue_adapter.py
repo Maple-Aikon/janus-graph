@@ -111,10 +111,7 @@ class EpisodeQueueAdapter:
         self._queue = queue
         self._lock = lock_settings
         # claimed_by tag: "<prefix>:<pid>" (e.g. "daemon:12345")
-        self._instance_id = (
-            instance_id
-            or f"{lock_settings.instance_id_prefix}:{os.getpid()}"
-        )
+        self._instance_id = instance_id or f"{lock_settings.instance_id_prefix}:{os.getpid()}"
 
     # ─── lifecycle ──────────────────────────────────────────────────────
 
@@ -247,13 +244,13 @@ class EpisodeQueueAdapter:
                 ) VALUES (?, 'queued', ?, ?, NULL, NULL, 0, 0, NULL, NULL, ?, ?, ?, ?)
                 """,
                 (
-                    ep_id,         # id
+                    ep_id,  # id
                     payload_json,  # payload_json
-                    now,           # enqueued_at
+                    now,  # enqueued_at
                     payload_hash,  # payload_hash
-                    claimed_by,    # claimed_by
-                    now,           # created_at
-                    now,           # updated_at
+                    claimed_by,  # claimed_by
+                    now,  # created_at
+                    now,  # updated_at
                 ),
             )
             conn.commit()

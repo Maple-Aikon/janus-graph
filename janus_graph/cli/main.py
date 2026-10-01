@@ -45,7 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # sweep
     sweep_parser = subparsers.add_parser("sweep", help="Process queued episodes via cron sweep")
-    sweep_parser.add_argument("--batch-size", type=int, default=None, help="Max episodes to process")
+    sweep_parser.add_argument(
+        "--batch-size", type=int, default=None, help="Max episodes to process"
+    )
 
     # dream
     dream_parser = subparsers.add_parser("dream", help="Execute dream mode memory consolidation")
@@ -69,7 +71,9 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser = subparsers.add_parser("report", help="Inspect execution reports")
     report_subs = report_parser.add_subparsers(dest="report_action", help="Report action")
     report_stats_parser = report_subs.add_parser("stats", help="Show recent report log summaries")
-    report_stats_parser.add_argument("--limit", type=int, default=10, help="Number of reports to show")
+    report_stats_parser.add_argument(
+        "--limit", type=int, default=10, help="Number of reports to show"
+    )
     report_stats_parser.add_argument("--kind", type=str, default=None, help="Filter by report kind")
     report_subs.add_parser("test-telegram", help="Send a test alert through Telegram sink")
     report_subs.add_parser("test-webhook", help="Send a test event through Webhook sink")
@@ -84,22 +88,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # snapshot
-    snapshot_parser = subparsers.add_parser("snapshot", help="Create an atomic backup of queue database and checkpoints")
+    snapshot_parser = subparsers.add_parser(
+        "snapshot", help="Create an atomic backup of queue database and checkpoints"
+    )
     snapshot_parser.add_argument(
         "--target-dir", default="./data/snapshots", help="Target snapshot directory"
     )
-    snapshot_parser.add_argument(
-        "--source-db", default=None, help="Source SQLite DB path"
-    )
+    snapshot_parser.add_argument("--source-db", default=None, help="Source SQLite DB path")
 
     # rollback
-    rollback_parser = subparsers.add_parser("rollback", help="Restore database and checkpoints from a snapshot")
+    rollback_parser = subparsers.add_parser(
+        "rollback", help="Restore database and checkpoints from a snapshot"
+    )
     rollback_parser.add_argument(
         "snapshot_dir", help="Path to snapshot directory containing episodes.db"
     )
-    rollback_parser.add_argument(
-        "--target-data-dir", default=None, help="Target data directory"
-    )
+    rollback_parser.add_argument("--target-data-dir", default=None, help="Target data directory")
 
     # mcp
     subparsers.add_parser("mcp", help="Start stdio MCP server for agent integration")
@@ -117,7 +121,7 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
         print("🏛️ Janus-Graph Diagnostics")
         print(f"  • Engine Host/Port: {cfg.engine.host}:{cfg.engine.port}")
         print(f"  • Queue DB: {cfg.pipeline.queue_db_path}")
-        
+
         # Check SQLite
         try:
             queue = EpisodeQueue(cfg.pipeline.queue_db_path)
@@ -129,6 +133,7 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
         # Check FalkorDB engine reachability
         try:
             from falkordb import FalkorDB
+
             fdb = FalkorDB(host=cfg.engine.host, port=cfg.engine.port)
             fdb.connection.ping()
             print("  • FalkorDB Engine: ONLINE")
@@ -137,11 +142,15 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
 
         # Check Host Architecture
         arch_info = detect_artifact()
-        print(f"  • Host System: {arch_info['system']} ({arch_info['normalized_arch']}) [Artifact: {arch_info['artifact']}, Supported: {arch_info['supported']}]")
+        print(
+            f"  • Host System: {arch_info['system']} ({arch_info['normalized_arch']}) [Artifact: {arch_info['artifact']}, Supported: {arch_info['supported']}]"
+        )
 
         # Check LLM / Embedding Config
         print(f"  • LLM Model: {cfg.graphiti.llm.model} ({cfg.graphiti.llm.base_url})")
-        print(f"  • Embedding Model: {cfg.graphiti.embedding.model} (dim={cfg.graphiti.embedding.dim})")
+        print(
+            f"  • Embedding Model: {cfg.graphiti.embedding.model} (dim={cfg.graphiti.embedding.dim})"
+        )
         print(f"  • Active Heuristic Rules: {cfg.heuristics.active_rules}")
         print("✅ Doctor diagnostics finished.")
         return 0
@@ -192,7 +201,9 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
             if dlq:
                 print(f"⚠️ Recent DLQ Entries ({len(dlq)}):")
                 for r in dlq:
-                    print(f"  - [{r.get('episode_id')}] attempts={r.get('attempt_count')} error={r.get('last_error')}")
+                    print(
+                        f"  - [{r.get('episode_id')}] attempts={r.get('attempt_count')} error={r.get('last_error')}"
+                    )
             return 0
         elif action == "retry":
             ok = asyncio.run(queue.replay_dlq_episode(args.episode_id))
@@ -203,9 +214,16 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
                 print(f"❌ Episode {args.episode_id} not found in DLQ.")
                 return 1
         elif action == "reap":
-            stuck = asyncio.run(queue.reap_stuck_processing(timeout_sec=cfg.pipeline.attempt_timeout_sec, max_attempts=cfg.pipeline.max_attempts))
+            stuck = asyncio.run(
+                queue.reap_stuck_processing(
+                    timeout_sec=cfg.pipeline.attempt_timeout_sec,
+                    max_attempts=cfg.pipeline.max_attempts,
+                )
+            )
             reaped = asyncio.run(queue.reap_failed_or_aborted())
-            print(f"🧹 Queue reaped: {stuck} stuck records recovered, {reaped} failed/aborted records re-queued.")
+            print(
+                f"🧹 Queue reaped: {stuck} stuck records recovered, {reaped} failed/aborted records re-queued."
+            )
             return 0
 
     elif cmd == "cache":
@@ -238,7 +256,7 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
                         lines.append(item)
                     except json.JSONDecodeError:
                         continue
-            for item in lines[-args.limit:]:
+            for item in lines[-args.limit :]:
                 ts = item.get("timestamp", "")
                 kind = item.get("kind", "")
                 sev = item.get("severity", "").upper()
@@ -283,7 +301,9 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
         print(f"📸 Creating snapshot of {src_db} into {args.target_dir}...")
         try:
             meta = snapshot_database(src_db, args.target_dir)
-            print(f"✅ Snapshot created successfully: {meta['counts']['total']} total records, sha256={meta['sha256'][:12]}...")
+            print(
+                f"✅ Snapshot created successfully: {meta['counts']['total']} total records, sha256={meta['sha256'][:12]}..."
+            )
             return 0
         except Exception as e:
             print(f"❌ Snapshot failed: {e}")
@@ -302,6 +322,7 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
 
     elif cmd == "mcp":
         from ..mcp.server import create_mcp_server
+
         server = create_mcp_server(cfg)
         server.run(transport="stdio")
         return 0

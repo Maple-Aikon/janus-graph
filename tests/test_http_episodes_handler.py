@@ -144,9 +144,7 @@ async def test_invalid_content_returns_422(base_settings, mock_adapter, bad_cont
 
 async def test_non_string_name_returns_422(base_settings, mock_adapter):
     ctx = _make_ctx(base_settings, mock_adapter)
-    resp = await episodes_handler(
-        _post(ctx, {"content": "ok", "name": 42})
-    )
+    resp = await episodes_handler(_post(ctx, {"content": "ok", "name": 42}))
     assert resp.status == 422
     assert "name" in (await _json_of(resp))["message"]
     mock_adapter.enqueue_guarded.assert_not_called()
@@ -156,9 +154,7 @@ async def test_non_string_name_returns_422(base_settings, mock_adapter):
 async def test_invalid_group_id_returns_422(base_settings, mock_adapter, bad_group):
     """group_id defaults only when the key is absent; explicit bad values 422."""
     ctx = _make_ctx(base_settings, mock_adapter)
-    resp = await episodes_handler(
-        _post(ctx, {"content": "ok", "group_id": bad_group})
-    )
+    resp = await episodes_handler(_post(ctx, {"content": "ok", "group_id": bad_group}))
     assert resp.status == 422
     assert "group_id" in (await _json_of(resp))["message"]
     mock_adapter.enqueue_guarded.assert_not_called()
@@ -166,9 +162,7 @@ async def test_invalid_group_id_returns_422(base_settings, mock_adapter, bad_gro
 
 async def test_non_string_source_description_returns_422(base_settings, mock_adapter):
     ctx = _make_ctx(base_settings, mock_adapter)
-    resp = await episodes_handler(
-        _post(ctx, {"content": "ok", "source_description": 99})
-    )
+    resp = await episodes_handler(_post(ctx, {"content": "ok", "source_description": 99}))
     assert resp.status == 422
     assert "source_description" in (await _json_of(resp))["message"]
     mock_adapter.enqueue_guarded.assert_not_called()
@@ -233,9 +227,7 @@ async def test_deduplicated_flag_is_passed_through(base_settings):
     """A dedup hit that resolves normally surfaces deduplicated=True, 202."""
     ctx = _make_ctx(base_settings, adapter=MagicMock())
     ctx.queue_adapter.enqueue_guarded = AsyncMock(
-        return_value=EnqueueResult(
-            episode_id="ep_dup", claimed_by=None, deduplicated=True
-        )
+        return_value=EnqueueResult(episode_id="ep_dup", claimed_by=None, deduplicated=True)
     )
     resp = await episodes_handler(_post(ctx, {"content": "c"}))
     assert resp.status == 202
@@ -279,9 +271,7 @@ async def test_duplicate_episode_returns_409_with_existing_id(base_settings):
 
 async def test_unexpected_adapter_error_returns_503(base_settings):
     ctx = _make_ctx(base_settings, adapter=MagicMock())
-    ctx.queue_adapter.enqueue_guarded = AsyncMock(
-        side_effect=RuntimeError("sqlite is locked")
-    )
+    ctx.queue_adapter.enqueue_guarded = AsyncMock(side_effect=RuntimeError("sqlite is locked"))
     resp = await episodes_handler(_post(ctx, {"content": "c"}))
     assert resp.status == 503
     body = await _json_of(resp)

@@ -162,7 +162,8 @@ def _restart_policy_payload(ctx: "DaemonContext") -> dict:
         "max_per_hour": snap.max_per_hour,
         "seconds_since_last_restart": (
             round(snap.seconds_since_last_restart, 2)
-            if snap.seconds_since_last_restart is not None else None
+            if snap.seconds_since_last_restart is not None
+            else None
         ),
         "cooldown_sec": snap.cooldown_sec,
         "disabled_reason": policy.disabled_reason,
@@ -383,9 +384,7 @@ async def search_graph_handler(request: web.Request) -> web.Response:
         result = await search_engine.search(payload)
     except SearchValidationError as e:
         status = 422 if e.code == "MIN_COSINE_OUT_OF_RANGE" else 400
-        return web.json_response(
-            {"code": e.code, "message": e.message}, status=status
-        )
+        return web.json_response({"code": e.code, "message": e.message}, status=status)
     except SearchBackendError as e:
         if e.code == "SEED_NOT_FOUND":
             return web.json_response({"code": e.code, "message": e.message}, status=404)

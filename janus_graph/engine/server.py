@@ -24,7 +24,7 @@ class FalkorDBServerManager:
     def resolve_binary_paths(self) -> tuple[Path, Path]:
         """Resolve platform-specific binary paths for redis-server and falkordb.so."""
         arch = platform.machine()
-        
+
         # Check standard names first
         redis_bin = self.bin_dir / "redis-server-8"
         if not redis_bin.exists():
@@ -64,23 +64,32 @@ class FalkorDBServerManager:
 
         cmd = [
             str(redis_bin),
-            "--port", str(self.config.port),
-            "--bind", self.config.host,
-            "--dir", str(self.data_dir),
-            "--loadmodule", str(falkordb_module),
-            "--daemonize", "yes",
-            "--pidfile", str(self.pid_file),
-            "--logfile", str(self.log_file),
+            "--port",
+            str(self.config.port),
+            "--bind",
+            self.config.host,
+            "--dir",
+            str(self.data_dir),
+            "--loadmodule",
+            str(falkordb_module),
+            "--daemonize",
+            "yes",
+            "--pidfile",
+            str(self.pid_file),
+            "--logfile",
+            str(self.log_file),
         ]
 
         # Plan #3 §9 BLOCK #2a: 10s timeout prevents redis-server from
         # hanging daemon if binary fails to start (e.g. corrupt AOF, disk full).
         # TimeoutExpired → log critical + return False so supervisor can trip CB.
         import subprocess as _sp
+
         try:
             _sp.run(cmd, check=True, timeout=10)
         except _sp.TimeoutExpired:
             import logging
+
             logging.getLogger("janus_graph.engine.server").critical(
                 "falkordb start timed out after 10s; binary likely stuck "
                 "(check AOF, disk, or fork limits)"

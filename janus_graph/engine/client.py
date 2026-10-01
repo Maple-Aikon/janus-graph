@@ -15,6 +15,7 @@ class FalkorDBClientFactory:
     def get_client(self) -> Any:
         """Create and return a FalkorDB client instance."""
         from falkordb import FalkorDB
+
         return FalkorDB(host=self.config.host, port=self.config.port)
 
     def ping(self) -> bool:

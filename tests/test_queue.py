@@ -24,9 +24,7 @@ def _index_names(conn):
     conn.row_factory = sqlite3.Row
     return {
         row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index'"
-        ).fetchall()
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
     }
 
 
@@ -52,7 +50,7 @@ async def test_queue_enqueue_and_stats(temp_queue):
 @pytest.mark.asyncio
 async def test_queue_claim_and_mark_done(temp_queue):
     ep_id = await temp_queue.enqueue("Task payload", group_id="test_group")
-    
+
     records = await temp_queue.claim_next_batch(limit=10)
     assert len(records) == 1
     assert records[0].id == ep_id
@@ -68,7 +66,7 @@ async def test_queue_claim_and_mark_done(temp_queue):
 @pytest.mark.asyncio
 async def test_queue_mark_failed_and_abort(temp_queue):
     ep_id = await temp_queue.enqueue("Error payload", group_id="test_group")
-    
+
     records = await temp_queue.claim_next_batch(limit=1)
     assert len(records) == 1
 
@@ -92,7 +90,7 @@ async def test_queue_mark_failed_and_abort(temp_queue):
 async def test_queue_dlq_replay(temp_queue):
     ep_id = await temp_queue.enqueue("DLQ replay item")
     await temp_queue.mark_aborted(ep_id, "Test error")
-    
+
     assert temp_queue.get_stats().get("dlq") == 1
     replayed = await temp_queue.replay_dlq_episode(ep_id)
     assert replayed is True
@@ -124,7 +122,10 @@ async def test_queue_replay_dlq_batch_filter_by_class(temp_queue):
     ep_timeout = await temp_queue.enqueue("timeout item")
     ep_budget = await temp_queue.enqueue("budget item")
 
-    await temp_queue.mark_aborted(ep_schema, "ValidationError: ExtractedEntities.extracted_entities Field required (SCHEMA_DRIFT)")
+    await temp_queue.mark_aborted(
+        ep_schema,
+        "ValidationError: ExtractedEntities.extracted_entities Field required (SCHEMA_DRIFT)",
+    )
     await temp_queue.mark_aborted(ep_timeout, "TimeoutError: embed API > 30s (TIMEOUT)")
     await temp_queue.mark_aborted(ep_budget, "HTTP 402: budget exceeded $5/$5 (BUDGET_EXCEEDED)")
 

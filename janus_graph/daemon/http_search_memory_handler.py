@@ -62,7 +62,7 @@ _RATE_LIMIT_WINDOW_SEC = 60.0
 
 # PR 2 / v0.5.0: input validation thresholds. Mirror hook-side guards
 # (``mcp_recall.js:query``) so HTTP callers can't bypass the policy.
-_MIN_QUERY_LEN = 4   # hook enforces >=4 to filter out noise like "hi"
+_MIN_QUERY_LEN = 4  # hook enforces >=4 to filter out noise like "hi"
 _MAX_QUERY_LEN = 512  # cap before graphiti embed (avoid OOM on text blob)
 _DEFAULT_LIMIT = 5
 _MIN_LIMIT = 1
@@ -110,9 +110,7 @@ class _TokenBucket:
     def __init__(self, max_requests: int, window_sec: float) -> None:
         self.max_requests = max_requests
         self.window_sec = window_sec
-        self._hits: "Dict[str, Deque[float]]" = defaultdict(
-            lambda: deque(maxlen=max_requests)
-        )
+        self._hits: "Dict[str, Deque[float]]" = defaultdict(lambda: deque(maxlen=max_requests))
         # v0.5.0.1 fix #6: insertion order proxy (used by LRU eviction).
         # We can't rely on ``_hits`` ordering because defaultdict
         # doesn't move-to-end on access. Use a parallel ordered set.
@@ -202,8 +200,7 @@ async def search_memory_handler(request: web.Request) -> web.Response:
         return web.json_response(
             {
                 "code": "RATE_LIMITED",
-                "message": f"max {_RATE_LIMIT_REQUESTS} req/"
-                           f"{int(_RATE_LIMIT_WINDOW_SEC)}s per IP",
+                "message": f"max {_RATE_LIMIT_REQUESTS} req/{int(_RATE_LIMIT_WINDOW_SEC)}s per IP",
             },
             status=429,
             headers={"Retry-After": str(int(_RATE_LIMIT_WINDOW_SEC))},
@@ -221,8 +218,7 @@ async def search_memory_handler(request: web.Request) -> web.Response:
         return web.json_response(
             {
                 "code": "INVALID_QUERY",
-                "message": f"query length must be in "
-                           f"[{_MIN_QUERY_LEN}, {_MAX_QUERY_LEN}]",
+                "message": f"query length must be in [{_MIN_QUERY_LEN}, {_MAX_QUERY_LEN}]",
             },
             status=400,
         )
@@ -250,8 +246,7 @@ async def search_memory_handler(request: web.Request) -> web.Response:
         return web.json_response(
             {
                 "code": "SEARCH_BACKEND_DOWN",
-                "message": "graphiti singleton not initialized "
-                           "(see daemon boot logs)",
+                "message": "graphiti singleton not initialized (see daemon boot logs)",
             },
             status=503,
         )
@@ -260,9 +255,7 @@ async def search_memory_handler(request: web.Request) -> web.Response:
     # Cheap pre-flight: ping Falkor with bounded timeout. If the
     # supervisor's breaker is OPEN, ``probe()`` returns False quickly.
     try:
-        falkor_ok = await asyncio.wait_for(
-            ctx.supervisor.probe(), timeout=1.0
-        )
+        falkor_ok = await asyncio.wait_for(ctx.supervisor.probe(), timeout=1.0)
     except asyncio.TimeoutError:
         falkor_ok = False
     if not falkor_ok:
@@ -284,7 +277,10 @@ async def search_memory_handler(request: web.Request) -> web.Response:
         # let it propagate per F8 (test_no_speculative_cancellation_code).
         result = await asyncio.wait_for(
             engine_search_memory(
-                ctx.settings, query, limit, graphiti=graphiti,
+                ctx.settings,
+                query,
+                limit,
+                graphiti=graphiti,
             ),
             timeout=_ENGINE_CALL_TIMEOUT_SEC,
         )
@@ -292,7 +288,9 @@ async def search_memory_handler(request: web.Request) -> web.Response:
         elapsed_ms = round((time.monotonic() - started) * 1000, 1)
         logger.warning(
             "/search/memory timed out after %.1fs query=%r limit=%d",
-            _ENGINE_CALL_TIMEOUT_SEC, query, limit,
+            _ENGINE_CALL_TIMEOUT_SEC,
+            query,
+            limit,
         )
         return web.json_response(
             {
@@ -310,7 +308,8 @@ async def search_memory_handler(request: web.Request) -> web.Response:
         elapsed_ms = round((time.monotonic() - started) * 1000, 1)
         logger.exception(
             "/search/memory envelope failure query=%r limit=%d",
-            query, limit,
+            query,
+            limit,
         )
         return web.json_response(
             {

@@ -53,6 +53,7 @@ def cron_enabled_settings(base_settings: JanusSettings) -> JanusSettings:
     """JanusSettings with cron_enabled=True (via model_copy)."""
     # Build a new object with daemon.cron_enabled=True. Pydantic v2 deep-copy.
     from copy import deepcopy
+
     s = deepcopy(base_settings)
     s.daemon.cron_enabled = True
     # Shrink interval so tests don't wait 10 minutes.
@@ -64,6 +65,7 @@ def cron_enabled_settings(base_settings: JanusSettings) -> JanusSettings:
 def closed_circuit_provider():
     """Provider returning CircuitState.CLOSED enum."""
     from janus_graph.daemon.circuit_breaker import CircuitState
+
     return lambda: CircuitState.CLOSED
 
 
@@ -71,6 +73,7 @@ def closed_circuit_provider():
 def open_circuit_provider():
     """Provider returning CircuitState.OPEN enum."""
     from janus_graph.daemon.circuit_breaker import CircuitState
+
     return lambda: CircuitState.OPEN
 
 
@@ -78,6 +81,7 @@ def open_circuit_provider():
 def half_open_circuit_provider():
     """Provider returning CircuitState.HALF_OPEN enum."""
     from janus_graph.daemon.circuit_breaker import CircuitState
+
     return lambda: CircuitState.HALF_OPEN
 
 
@@ -110,8 +114,10 @@ async def test_v2_cron_enabled_starts_tasks(cron_enabled_settings, closed_circui
     sweep_mock = AsyncMock(return_value={"succeeded_count": 0, "failed_count": 0})
     dream_mock = AsyncMock(return_value={"status": "complete", "duration_ms": 0})
 
-    with patch("janus_graph.daemon.cron_loop.run_cron_sweep", sweep_mock), \
-         patch("janus_graph.daemon.cron_loop.run_dream_consolidation", dream_mock):
+    with (
+        patch("janus_graph.daemon.cron_loop.run_cron_sweep", sweep_mock),
+        patch("janus_graph.daemon.cron_loop.run_dream_consolidation", dream_mock),
+    ):
         await loop.start()
         try:
             assert loop.running is True
@@ -167,8 +173,10 @@ async def test_v4_stop_cancels_cleanly(cron_enabled_settings, closed_circuit_pro
     loop = CronLoop(cron_enabled_settings, closed_circuit_provider)
 
     sweep_mock = AsyncMock(side_effect=asyncio.CancelledError)
-    with patch("janus_graph.daemon.cron_loop.run_cron_sweep", sweep_mock), \
-         patch("janus_graph.daemon.cron_loop.run_dream_consolidation", AsyncMock()):
+    with (
+        patch("janus_graph.daemon.cron_loop.run_cron_sweep", sweep_mock),
+        patch("janus_graph.daemon.cron_loop.run_dream_consolidation", AsyncMock()),
+    ):
         await loop.start()
         assert loop.running is True
 
@@ -190,9 +198,16 @@ async def test_snapshot_shape(base_settings, closed_circuit_provider):
     """Snapshot contains enabled/running/tick_count/skipped fields."""
     loop = CronLoop(base_settings, closed_circuit_provider)
     snap = loop.snapshot()
-    for key in ("enabled", "running", "tick_count",
-                "skipped_circuit_open", "last_sweep_at",
-                "last_sweep_stats", "last_dream_at", "last_dream_result"):
+    for key in (
+        "enabled",
+        "running",
+        "tick_count",
+        "skipped_circuit_open",
+        "last_sweep_at",
+        "last_sweep_stats",
+        "last_dream_at",
+        "last_dream_result",
+    ):
         assert key in snap, f"missing key: {key}"
 
 
@@ -202,6 +217,7 @@ async def test_snapshot_shape(base_settings, closed_circuit_provider):
 def test_state_str_accepts_enum():
     """_state_str handles CircuitState enum."""
     from janus_graph.daemon.circuit_breaker import CircuitState
+
     assert _state_str(CircuitState.CLOSED) == "CLOSED"
     assert _state_str(CircuitState.OPEN) == "OPEN"
     assert _state_str(CircuitState.HALF_OPEN) == "HALF_OPEN"

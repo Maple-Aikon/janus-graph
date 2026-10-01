@@ -131,9 +131,7 @@ async def test_naive_started_at_is_treated_as_utc(temp_queue):
     """A tz-naive ``started_at`` gets UTC attached, so age is computed right."""
     ep = await temp_queue.enqueue("naive item")
     await temp_queue.claim_next_batch(limit=1)
-    naive_old = (datetime.now(timezone.utc) - timedelta(seconds=1000)).replace(
-        tzinfo=None
-    )
+    naive_old = (datetime.now(timezone.utc) - timedelta(seconds=1000)).replace(tzinfo=None)
     _set_started_at(temp_queue, ep, naive_old.isoformat())
 
     reaped = await temp_queue.reap_stuck_processing(timeout_sec=900, max_attempts=3)

@@ -141,9 +141,7 @@ async def test_get_comma_separated_seeds_and_ints(base_settings, mock_engine):
 async def test_get_trims_whitespace_and_drops_empty_seeds(base_settings, mock_engine):
     """?seed_entities= a , , b  -> ['a','b'] (split/strip/filter chain)."""
     ctx = _make_ctx(base_settings, mock_engine)
-    resp = await search_graph_handler(
-        _get(ctx, "seed_entities= a , , b &max_hops=1")
-    )
+    resp = await search_graph_handler(_get(ctx, "seed_entities= a , , b &max_hops=1"))
     assert resp.status == 200
     assert mock_engine.search.await_args.args[0]["seed_entities"] == ["a", "b"]
 
@@ -164,9 +162,7 @@ async def test_get_edge_types_parsed_as_comma_list(base_settings, mock_engine):
 async def test_get_non_int_max_hops_returns_400(base_settings, mock_engine, bad):
     """int() raises ValueError -> 400, and the engine is never called."""
     ctx = _make_ctx(base_settings, mock_engine)
-    resp = await search_graph_handler(
-        _get(ctx, "seed_entities=a&max_hops=" + bad)
-    )
+    resp = await search_graph_handler(_get(ctx, "seed_entities=a&max_hops=" + bad))
     assert resp.status == 400
     body = await _json_of(resp)
     assert body["code"] == "INVALID_BODY"
@@ -195,9 +191,7 @@ async def test_get_non_int_limit_returns_400(base_settings, mock_engine):
         ("maybe", False),
     ],
 )
-async def test_get_include_episodes_bool_coercion(
-    base_settings, mock_engine, raw, expected
-):
+async def test_get_include_episodes_bool_coercion(base_settings, mock_engine, raw, expected):
     """Only 1/true/yes (case-insensitive) are truthy; everything else False."""
     ctx = _make_ctx(base_settings, mock_engine)
     resp = await search_graph_handler(
@@ -229,8 +223,7 @@ async def test_get_absent_params_are_omitted_not_nulled(base_settings, mock_engi
     resp = await search_graph_handler(_get(ctx, "seed_entities=a&max_hops=1"))
     assert resp.status == 200
     payload = mock_engine.search.await_args.args[0]
-    for key in ("min_cosine", "mmr_lambda", "limit", "include_episodes",
-                "edge_types"):
+    for key in ("min_cosine", "mmr_lambda", "limit", "include_episodes", "edge_types"):
         assert key not in payload, key
     assert payload["seed_entities"] == ["a"]
     assert payload["max_hops"] == 1
@@ -243,9 +236,7 @@ async def test_query_defaults_to_first_seed(base_settings, mock_engine):
     """This default drives the cosine step of the pipeline - a silent drop
     would return zero facts with no error."""
     ctx = _make_ctx(base_settings, mock_engine)
-    resp = await search_graph_handler(
-        _get(ctx, "seed_entities=alpha,beta&max_hops=1")
-    )
+    resp = await search_graph_handler(_get(ctx, "seed_entities=alpha,beta&max_hops=1"))
     assert resp.status == 200
     assert mock_engine.search.await_args.args[0]["query"] == "alpha"
 
@@ -272,8 +263,10 @@ async def test_no_query_injection_when_seeds_absent(base_settings, mock_engine):
 
 
 async def test_min_cosine_out_of_range_maps_to_422(base_settings):
-    ctx = _make_ctx(base_settings, _engine_raising(
-        SearchValidationError("MIN_COSINE_OUT_OF_RANGE", "must be 0..1")))
+    ctx = _make_ctx(
+        base_settings,
+        _engine_raising(SearchValidationError("MIN_COSINE_OUT_OF_RANGE", "must be 0..1")),
+    )
     resp = await search_graph_handler(_get(ctx, "seed_entities=a&max_hops=1"))
     assert resp.status == 422
     body = await _json_of(resp)
@@ -282,32 +275,36 @@ async def test_min_cosine_out_of_range_maps_to_422(base_settings):
 
 
 async def test_other_validation_error_maps_to_400(base_settings):
-    ctx = _make_ctx(base_settings, _engine_raising(
-        SearchValidationError("INVALID_HOPS", "hops must be 1..3")))
+    ctx = _make_ctx(
+        base_settings, _engine_raising(SearchValidationError("INVALID_HOPS", "hops must be 1..3"))
+    )
     resp = await search_graph_handler(_get(ctx, "seed_entities=a&max_hops=9"))
     assert resp.status == 400
     assert (await _json_of(resp))["code"] == "INVALID_HOPS"
 
 
 async def test_seed_not_found_maps_to_404(base_settings):
-    ctx = _make_ctx(base_settings, _engine_raising(
-        SearchBackendError("SEED_NOT_FOUND", "no entity alpha")))
+    ctx = _make_ctx(
+        base_settings, _engine_raising(SearchBackendError("SEED_NOT_FOUND", "no entity alpha"))
+    )
     resp = await search_graph_handler(_get(ctx, "seed_entities=alpha&max_hops=1"))
     assert resp.status == 404
     assert (await _json_of(resp))["code"] == "SEED_NOT_FOUND"
 
 
 async def test_traversal_timeout_maps_to_504(base_settings):
-    ctx = _make_ctx(base_settings, _engine_raising(
-        SearchBackendError("TRAVERSAL_TIMEOUT", "exceeded 2.0s")))
+    ctx = _make_ctx(
+        base_settings, _engine_raising(SearchBackendError("TRAVERSAL_TIMEOUT", "exceeded 2.0s"))
+    )
     resp = await search_graph_handler(_get(ctx, "seed_entities=a&max_hops=3"))
     assert resp.status == 504
     assert (await _json_of(resp))["code"] == "TRAVERSAL_TIMEOUT"
 
 
 async def test_falkor_down_maps_to_503(base_settings):
-    ctx = _make_ctx(base_settings, _engine_raising(
-        SearchBackendError("FALKOR_DOWN", "cannot reach :6379")))
+    ctx = _make_ctx(
+        base_settings, _engine_raising(SearchBackendError("FALKOR_DOWN", "cannot reach :6379"))
+    )
     resp = await search_graph_handler(_get(ctx, "seed_entities=a&max_hops=1"))
     assert resp.status == 503
     assert (await _json_of(resp))["code"] == "FALKOR_DOWN"
@@ -315,8 +312,7 @@ async def test_falkor_down_maps_to_503(base_settings):
 
 async def test_unmapped_backend_error_code_defaults_to_503(base_settings):
     """Unknown backend code must still degrade to 503, never leak a 200."""
-    ctx = _make_ctx(base_settings, _engine_raising(
-        SearchBackendError("SOMETHING_NEW", "unmapped")))
+    ctx = _make_ctx(base_settings, _engine_raising(SearchBackendError("SOMETHING_NEW", "unmapped")))
     resp = await search_graph_handler(_get(ctx, "seed_entities=a&max_hops=1"))
     assert resp.status == 503
     assert (await _json_of(resp))["code"] == "SOMETHING_NEW"
@@ -341,7 +337,12 @@ async def test_success_envelope_shape(base_settings, mock_engine):
     assert resp.status == 200
     body = await _json_of(resp)
     assert set(body) == {
-        "results", "count", "elapsed_ms", "degraded", "warnings", "daemon_version",
+        "results",
+        "count",
+        "elapsed_ms",
+        "degraded",
+        "warnings",
+        "daemon_version",
     }
     assert body["count"] == 1
     assert body["elapsed_ms"] == 42
@@ -358,7 +359,10 @@ async def test_degraded_and_warnings_are_surfaced(base_settings):
     engine = MagicMock()
     engine.search = AsyncMock(
         return_value=SearchResponse(
-            results=[], count=0, elapsed_ms=7, degraded=True,
+            results=[],
+            count=0,
+            elapsed_ms=7,
+            degraded=True,
             warnings=["embedding degraded", "2 seeds missing"],
         )
     )

@@ -74,6 +74,7 @@ from typing import Any, Dict
 from janus_graph.heuristics.rules.base import HeuristicRule
 from janus_graph.heuristics.registry import HeuristicRegistry
 
+
 class CustomMemoryRule(HeuristicRule):
     @property
     def name(self) -> str:
@@ -90,13 +91,16 @@ class CustomMemoryRule(HeuristicRule):
     def can_repair(self, schema_name: str, payload: Dict[str, Any], error: Any = None) -> bool:
         return schema_name == self.target_model or "custom_field" in payload
 
-    def repair(self, schema_name: str, payload: Dict[str, Any], error: Any = None) -> Dict[str, Any]:
+    def repair(
+        self, schema_name: str, payload: Dict[str, Any], error: Any = None
+    ) -> Dict[str, Any]:
         repaired = dict(payload)
         if "tags" not in repaired or repaired["tags"] is None:
             repaired["tags"] = []
         elif isinstance(repaired["tags"], str):
             repaired["tags"] = [t.strip() for t in repaired["tags"].split(",")]
         return repaired
+
 
 # Register the rule via an instantiated registry
 registry = HeuristicRegistry(active_rules=["custom_memory_repair"])

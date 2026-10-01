@@ -242,9 +242,7 @@ async def test_http_episodes_mcp_only_lock(tmp_queue_path):
     await adapter.start()
     ctx = DaemonContext(
         settings=s,
-        supervisor=DaemonSupervisor(
-            engine_config=s.engine, circuit_config=s.daemon.falkor_circuit
-        ),
+        supervisor=DaemonSupervisor(engine_config=s.engine, circuit_config=s.daemon.falkor_circuit),
         http_settings=s.daemon.http,
         version=__version__,
         shutdown_event=asyncio.Event(),
@@ -280,9 +278,7 @@ async def test_http_episodes_malformed_body(http_client_daemon_only):
 @pytest.mark.asyncio
 async def test_http_episodes_missing_content(http_client_daemon_only):
     """T6 HTTP: missing content field → 422 INVALID_BODY."""
-    resp = await http_client_daemon_only.post(
-        "/episodes", json={"name": "no-content"}
-    )
+    resp = await http_client_daemon_only.post("/episodes", json={"name": "no-content"})
     assert resp.status == 422
     body = await resp.json()
     assert body["code"] == "INVALID_BODY"
@@ -292,9 +288,7 @@ async def test_http_episodes_missing_content(http_client_daemon_only):
 @pytest.mark.asyncio
 async def test_http_episodes_empty_content(http_client_daemon_only):
     """Empty content string also rejected → 422 INVALID_BODY."""
-    resp = await http_client_daemon_only.post(
-        "/episodes", json={"content": "   "}
-    )
+    resp = await http_client_daemon_only.post("/episodes", json={"content": "   "})
     assert resp.status == 422
     body = await resp.json()
     assert body["code"] == "INVALID_BODY"

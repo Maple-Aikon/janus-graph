@@ -178,7 +178,9 @@ def snapshot_database(
         counts["done"] = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM episodes WHERE status='failed';")
         counts["failed"] = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM episodes WHERE status IN ('failed', 'aborted', 'dead_letter');")
+        cur.execute(
+            "SELECT COUNT(*) FROM episodes WHERE status IN ('failed', 'aborted', 'dead_letter');"
+        )
         counts["dlq"] = cur.fetchone()[0]
     except Exception as e:
         logger.warning(f"Could not calculate counts from snapshot db: {e}")

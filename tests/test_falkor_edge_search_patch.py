@@ -94,9 +94,7 @@ def test_live_path_cypher_has_no_entity_label():
     from graphiti_core.search.search_filters import SearchFilters
 
     asyncio.run(
-        _su().edge_fulltext_search(
-            driver, "FalkorDB", SearchFilters(), ["graphiti_memory"], 5
-        )
+        _su().edge_fulltext_search(driver, "FalkorDB", SearchFilters(), ["graphiti_memory"], 5)
     )
 
     cypher = driver.cypher
@@ -116,9 +114,7 @@ def test_live_path_captures_the_slow_cypher_when_unpatched():
     from graphiti_core.search.search_filters import SearchFilters
 
     asyncio.run(
-        _su().edge_fulltext_search(
-            driver, "FalkorDB", SearchFilters(), ["graphiti_memory"], 5
-        )
+        _su().edge_fulltext_search(driver, "FalkorDB", SearchFilters(), ["graphiti_memory"], 5)
     )
     assert UNPATCHED_EDGE_MATCH in driver.cypher
 
@@ -129,9 +125,7 @@ def test_live_path_preserves_the_rest_of_the_cypher():
     from graphiti_core.search.search_filters import SearchFilters
 
     asyncio.run(
-        _su().edge_fulltext_search(
-            driver, "FalkorDB", SearchFilters(), ["graphiti_memory"], 5
-        )
+        _su().edge_fulltext_search(driver, "FalkorDB", SearchFilters(), ["graphiti_memory"], 5)
     )
     cypher = driver.cypher
     assert "db.idx.fulltext.queryRelationships" in cypher

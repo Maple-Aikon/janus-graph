@@ -107,7 +107,7 @@ async def test_timeout_surfaces_as_falkor_down():
 
 @pytest.mark.asyncio
 async def test_falkordb_parse_rejection_surfaces_as_invalid_cypher():
-    """"Invalid input P" is our bug, not an outage (see _classify_cypher_error)."""
+    """A cypher "Invalid input P" rejection is our bug, not an outage (see _classify_cypher_error)."""
     engine = _engine()
     _attach(engine, side_effect=RuntimeError("Invalid input P: expected ..."))
 
@@ -144,9 +144,7 @@ async def test_hit_returns_the_seed_name():
 @pytest.mark.asyncio
 async def test_partial_match_returns_only_found_seeds():
     engine = _engine()
-    redis = AsyncMock(
-        side_effect=[_exists_result(True), _exists_result(False)]
-    )
+    redis = AsyncMock(side_effect=[_exists_result(True), _exists_result(False)])
     engine._redis = MagicMock()
     engine._redis.execute_command = redis
 

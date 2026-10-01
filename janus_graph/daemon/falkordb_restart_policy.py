@@ -51,8 +51,8 @@ logger = logging.getLogger("janus_graph.daemon.falkordb_restart_policy")
 class RestartPolicyState(str, Enum):
     """Restart-policy health state (orthogonal to circuit-breaker state)."""
 
-    OK = "ok"                          # within budget, restarts permitted
-    COOLING_DOWN = "cooling_down"      # last restart too recent; wait
+    OK = "ok"  # within budget, restarts permitted
+    COOLING_DOWN = "cooling_down"  # last restart too recent; wait
     BUDGET_EXHAUSTED = "budget_exhausted"  # rate limit hit; need operator
     FATAL_DEGRADED = "fatal_degraded"  # operator-only recovery mode
 
@@ -112,9 +112,7 @@ class FalkorRestartPolicy:
         if self._disabled_by_operator:
             return
         self._disabled_by_operator = True
-        logger.warning(
-            "restart_policy: DISABLED by operator (reason=%s)", reason
-        )
+        logger.warning("restart_policy: DISABLED by operator (reason=%s)", reason)
 
     @property
     def disabled_reason(self) -> Optional[str]:
@@ -141,9 +139,7 @@ class FalkorRestartPolicy:
         """Read-only snapshot for /health JSON (no mutation)."""
         self._prune_window()  # keep the count honest at snapshot time
         now = time.monotonic()
-        seconds_since = (
-            None if self._last_restart_at is None else now - self._last_restart_at
-        )
+        seconds_since = None if self._last_restart_at is None else now - self._last_restart_at
         return RestartPolicySnapshot(
             state=self._state,
             restarts_in_window=len(self._restart_times),
@@ -193,8 +189,7 @@ class FalkorRestartPolicy:
                 manager (set via ``register_manager`` from the supervisor).
         """
         logger.warning(
-            "restart_policy: circuit CLOSED → OPEN (failures=%d), "
-            "attempting bounded restart",
+            "restart_policy: circuit CLOSED → OPEN (failures=%d), attempting bounded restart",
             snapshot.failure_count,
         )
         # Late-bind manager if caller passed one (e.g. supervisor wiring).
@@ -228,9 +223,7 @@ class FalkorRestartPolicy:
         the lock as "another restart is in flight, do not duplicate".
         """
         if self._disabled_by_operator:
-            logger.warning(
-                "restart_policy: restart refused (operator_disabled)"
-            )
+            logger.warning("restart_policy: restart refused (operator_disabled)")
             return False
 
         if self._state is RestartPolicyState.FATAL_DEGRADED:
@@ -240,9 +233,7 @@ class FalkorRestartPolicy:
         # Lock acquisition is non-blocking: if another restart is in flight,
         # skip rather than wait (caller is likely a probe-storm duplicate).
         if self._restart_in_progress.locked():
-            logger.debug(
-                "restart_policy: restart skipped (concurrent _restart in flight)"
-            )
+            logger.debug("restart_policy: restart skipped (concurrent _restart in flight)")
             return False
 
         with self._restart_in_progress:
@@ -258,9 +249,9 @@ class FalkorRestartPolicy:
             if elapsed < self._settings.cooldown_sec:
                 self._state = RestartPolicyState.COOLING_DOWN
                 logger.info(
-                    "restart_policy: cooling down "
-                    "(%.1fs elapsed, need %.0fs)",
-                    elapsed, self._settings.cooldown_sec,
+                    "restart_policy: cooling down (%.1fs elapsed, need %.0fs)",
+                    elapsed,
+                    self._settings.cooldown_sec,
                 )
                 return False
 
@@ -278,8 +269,7 @@ class FalkorRestartPolicy:
             ok = self._manager.start()
         except Exception as e:
             logger.critical(
-                "restart_policy: manager.start() raised %s; "
-                "entering FATAL_DEGRADED",
+                "restart_policy: manager.start() raised %s; entering FATAL_DEGRADED",
                 e,
                 exc_info=True,
             )
@@ -292,14 +282,13 @@ class FalkorRestartPolicy:
         self._state = RestartPolicyState.OK
         if ok:
             logger.info(
-                "restart_policy: restart succeeded "
-                "(restarts_in_window=%d/%d)",
-                len(self._restart_times), self._settings.max_per_hour,
+                "restart_policy: restart succeeded (restarts_in_window=%d/%d)",
+                len(self._restart_times),
+                self._settings.max_per_hour,
             )
         else:
             logger.warning(
-                "restart_policy: manager.start() returned False; "
-                "FalkorDB may not be fully up",
+                "restart_policy: manager.start() returned False; FalkorDB may not be fully up",
             )
         return ok
 

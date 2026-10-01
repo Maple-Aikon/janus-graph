@@ -35,11 +35,11 @@ async def test_worker_process_success(temp_queue):
     assert len(records) == 1
 
     worker = EpisodeWorker(temp_queue)
-    
+
     # Mock Graphiti client
     mock_client = AsyncMock()
     mock_client.add_episode = AsyncMock(return_value=None)
-    
+
     with patch("janus_graph.core.instance.create_graphiti_instance", return_value=mock_client):
         ok = await worker.process_record(records[0])
         assert ok is True
@@ -80,7 +80,7 @@ async def test_worker_process_timeout(temp_queue):
 async def test_cron_sweep(temp_dir):
     db_path = temp_dir / "cron_queue.db"
     report_path = temp_dir / "cron_report.jsonl"
-    
+
     settings = Settings(
         report=ReportSettings(
             sinks=("file",),

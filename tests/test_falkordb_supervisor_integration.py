@@ -93,6 +93,7 @@ def test_happy_path_kill_restart_recover(supervisor, mock_manager, monkeypatch):
         # We can't easily simulate Redis-down without socket patching;
         # use direct call.
         import asyncio
+
         asyncio.run(supervisor.breaker.record_failure())
     assert supervisor.breaker.state.value == "open"
 
@@ -142,7 +143,7 @@ def test_rate_limit_kicks_in_after_max(supervisor, mock_manager, monkeypatch):
 
     # First 3 succeed.
     for i in range(3):
-        assert policy.attempt_restart() is True, f"call #{i+1}"
+        assert policy.attempt_restart() is True, f"call #{i + 1}"
         fake_now[0] += 1
         mock_manager.start.reset_mock()
 

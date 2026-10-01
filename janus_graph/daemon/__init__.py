@@ -18,6 +18,7 @@ tests that only touch circuit_breaker.py can run without those deps.
 """
 
 from __future__ import annotations
+
 __all__ = [
     "DaemonSupervisor",
     "build_app",
@@ -53,6 +54,7 @@ def __getattr__(name: str):  # PEP 562 lazy attribute access
     """Lazy import for public surface (pulls submodules on first access)."""
     if name in _LAZY_EXPORTS:
         import importlib
+
         module = importlib.import_module(_LAZY_EXPORTS[name])
         attr = getattr(module, name)
         globals()[name] = attr  # cache for subsequent access

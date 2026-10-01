@@ -102,22 +102,16 @@ def _make_ctx(
     )
 
 
-def _make_request(
-    ctx: DaemonContext, query_string: str = ""
-) -> Any:
+def _make_request(ctx: DaemonContext, query_string: str = "") -> Any:
     """Build a mocked aiohttp request bound to ctx + query string."""
-    return make_mocked_request(
-        "GET", f"/search/memory?{query_string}", app={"ctx": ctx}
-    )
+    return make_mocked_request("GET", f"/search/memory?{query_string}", app={"ctx": ctx})
 
 
 # ─── Test A: query validation ───────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_missing_query_returns_400(
-    base_settings, alive_supervisor, mock_graphiti
-):
+async def test_missing_query_returns_400(base_settings, alive_supervisor, mock_graphiti):
     ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
     req = _make_request(ctx, "")  # no query
     resp = await search_memory_handler(req)
@@ -127,9 +121,7 @@ async def test_missing_query_returns_400(
 
 
 @pytest.mark.asyncio
-async def test_short_query_returns_400(
-    base_settings, alive_supervisor, mock_graphiti
-):
+async def test_short_query_returns_400(base_settings, alive_supervisor, mock_graphiti):
     ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
     req = _make_request(ctx, "query=hi")  # len 2 < 4
     resp = await search_memory_handler(req)
@@ -140,9 +132,7 @@ async def test_short_query_returns_400(
 
 
 @pytest.mark.asyncio
-async def test_too_long_query_returns_400(
-    base_settings, alive_supervisor, mock_graphiti
-):
+async def test_too_long_query_returns_400(base_settings, alive_supervisor, mock_graphiti):
     ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
     req = _make_request(ctx, f"query={'x' * 513}")
     resp = await search_memory_handler(req)
@@ -152,9 +142,7 @@ async def test_too_long_query_returns_400(
 
 
 @pytest.mark.asyncio
-async def test_query_whitespace_only_returns_400(
-    base_settings, alive_supervisor, mock_graphiti
-):
+async def test_query_whitespace_only_returns_400(base_settings, alive_supervisor, mock_graphiti):
     ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
     req = _make_request(ctx, "query=%20%20%20")  # 3 spaces
     resp = await search_memory_handler(req)
@@ -167,9 +155,7 @@ async def test_query_whitespace_only_returns_400(
 
 
 @pytest.mark.asyncio
-async def test_limit_non_integer_returns_400(
-    base_settings, alive_supervisor, mock_graphiti
-):
+async def test_limit_non_integer_returns_400(base_settings, alive_supervisor, mock_graphiti):
     ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
     req = _make_request(ctx, "query=Thuy%20Vi&limit=abc")
     resp = await search_memory_handler(req)
@@ -195,22 +181,22 @@ async def test_limit_out_of_range_returns_400(
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_enforced_at_61st_request(
-    base_settings, alive_supervisor, mock_graphiti
-):
+async def test_rate_limit_enforced_at_61st_request(base_settings, alive_supervisor, mock_graphiti):
     """First _RATE_LIMIT_REQUESTS pass; 61st returns 429."""
     ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
 
     # Mock the engine to return a trivial success so 1..60 hit 200.
     with patch(
         "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
-        new=AsyncMock(return_value={
-            "success": True,
-            "group_id": "graphiti_memory",
-            "query": "Thuy Vi",
-            "count": 0,
-            "results": [],
-        }),
+        new=AsyncMock(
+            return_value={
+                "success": True,
+                "group_id": "graphiti_memory",
+                "query": "Thuy Vi",
+                "count": 0,
+                "results": [],
+            }
+        ),
     ):
         for i in range(_RATE_LIMIT_REQUESTS):
             req = _make_request(ctx, "query=Thuy%20Vi")
@@ -237,10 +223,15 @@ async def test_rate_limit_response_has_retry_after_header(
 
     with patch(
         "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
-        new=AsyncMock(return_value={
-            "success": True, "group_id": "graphiti_memory",
-            "query": "Thuy Vi", "count": 0, "results": [],
-        }),
+        new=AsyncMock(
+            return_value={
+                "success": True,
+                "group_id": "graphiti_memory",
+                "query": "Thuy Vi",
+                "count": 0,
+                "results": [],
+            }
+        ),
     ):
         for _ in range(_RATE_LIMIT_REQUESTS):
             req = _make_request(ctx, "query=Thuy%20Vi")
@@ -256,9 +247,7 @@ async def test_rate_limit_response_has_retry_after_header(
 
 
 @pytest.mark.asyncio
-async def test_missing_graphiti_returns_503(
-    base_settings, alive_supervisor
-):
+async def test_missing_graphiti_returns_503(base_settings, alive_supervisor):
     ctx = _make_ctx(base_settings, alive_supervisor, graphiti=None)
     req = _make_request(ctx, "query=Thuy%20Vi")
     resp = await search_memory_handler(req)
@@ -271,9 +260,7 @@ async def test_missing_graphiti_returns_503(
 
 
 @pytest.mark.asyncio
-async def test_falkor_down_returns_503(
-    base_settings, dead_supervisor, mock_graphiti
-):
+async def test_falkor_down_returns_503(base_settings, dead_supervisor, mock_graphiti):
     ctx = _make_ctx(base_settings, dead_supervisor, mock_graphiti)
     req = _make_request(ctx, "query=Thuy%20Vi")
     resp = await search_memory_handler(req)
@@ -286,9 +273,7 @@ async def test_falkor_down_returns_503(
 
 
 @pytest.mark.asyncio
-async def test_happy_path_delegates_to_engine(
-    base_settings, alive_supervisor, mock_graphiti
-):
+async def test_happy_path_delegates_to_engine(base_settings, alive_supervisor, mock_graphiti):
     ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
 
     engine_response = {
@@ -297,10 +282,18 @@ async def test_happy_path_delegates_to_engine(
         "query": "Thuy Vi",
         "count": 2,
         "results": [
-            {"fact": "Thúy Vi là vợ của anh Maple.",
-             "name": "Thúy Vi", "valid_at": "", "invalid_at": ""},
-            {"fact": "Thúy Vi đồng sáng lập An Hiên Homestay.",
-             "name": "Thúy Vi", "valid_at": "", "invalid_at": ""},
+            {
+                "fact": "Thúy Vi là vợ của anh Maple.",
+                "name": "Thúy Vi",
+                "valid_at": "",
+                "invalid_at": "",
+            },
+            {
+                "fact": "Thúy Vi đồng sáng lập An Hiên Homestay.",
+                "name": "Thúy Vi",
+                "valid_at": "",
+                "invalid_at": "",
+            },
         ],
     }
 
@@ -332,9 +325,7 @@ async def test_happy_path_delegates_to_engine(
 
 
 @pytest.mark.asyncio
-async def test_engine_falkor_error_maps_to_503(
-    base_settings, alive_supervisor, mock_graphiti
-):
+async def test_engine_falkor_error_maps_to_503(base_settings, alive_supervisor, mock_graphiti):
     """Engine returns success=False with 'falkor' in error → 503."""
     ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
     engine_response = {
@@ -356,9 +347,7 @@ async def test_engine_falkor_error_maps_to_503(
 
 
 @pytest.mark.asyncio
-async def test_engine_generic_error_maps_to_500(
-    base_settings, alive_supervisor, mock_graphiti
-):
+async def test_engine_generic_error_maps_to_500(base_settings, alive_supervisor, mock_graphiti):
     """Engine returns success=False with non-falkor error → 500."""
     ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
     engine_response = {
@@ -383,9 +372,7 @@ async def test_engine_generic_error_maps_to_500(
 
 
 @pytest.mark.asyncio
-async def test_response_shape_matches_mcp_tool(
-    base_settings, alive_supervisor, mock_graphiti
-):
+async def test_response_shape_matches_mcp_tool(base_settings, alive_supervisor, mock_graphiti):
     """HTTP 200 body keys must be a superset of the stdio MCP
     ``search_memory`` response. Adding keys (elapsed_ms, degraded) is
     OK; missing keys would break clients that migrate from stdio.
@@ -396,8 +383,7 @@ async def test_response_shape_matches_mcp_tool(
         "group_id": "graphiti_memory",
         "query": "Thuy Vi",
         "count": 1,
-        "results": [{"fact": "test", "name": "Thúy Vi",
-                     "valid_at": "", "invalid_at": ""}],
+        "results": [{"fact": "test", "name": "Thúy Vi", "valid_at": "", "invalid_at": ""}],
     }
     with patch(
         "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
@@ -450,13 +436,14 @@ async def test_no_speculative_cancellation_code_added(
 
 
 @pytest.mark.asyncio
-async def test_elapsed_ms_is_positive(
-    base_settings, alive_supervisor, mock_graphiti
-):
+async def test_elapsed_ms_is_positive(base_settings, alive_supervisor, mock_graphiti):
     ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
     engine_response = {
-        "success": True, "group_id": "graphiti_memory",
-        "query": "Thuy Vi", "count": 0, "results": [],
+        "success": True,
+        "group_id": "graphiti_memory",
+        "query": "Thuy Vi",
+        "count": 0,
+        "results": [],
     }
     with patch(
         "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
@@ -473,9 +460,7 @@ async def test_elapsed_ms_is_positive(
 
 
 @pytest.mark.asyncio
-async def test_engine_call_timeout_returns_504(
-    base_settings, alive_supervisor, mock_graphiti
-):
+async def test_engine_call_timeout_returns_504(base_settings, alive_supervisor, mock_graphiti):
     """v0.5.0.1 fix #1: bounded engine call. If engine_search_memory
     hangs longer than ``_ENGINE_CALL_TIMEOUT_SEC``, return 504
     SEARCH_TIMEOUT + Retry-After: 5 header instead of holding the
@@ -490,16 +475,18 @@ async def test_engine_call_timeout_returns_504(
         # ``asyncio.wait_for`` call to use a tighter timeout so the
         # test finishes quickly.
         await asyncio.sleep(60.0)
-        return {"success": True, "group_id": "g", "query": "x",
-                "count": 0, "results": []}
+        return {"success": True, "group_id": "g", "query": "x", "count": 0, "results": []}
 
     # Patch the module constant to a tiny value so the test runs fast.
-    with patch(
-        "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
-        new=AsyncMock(side_effect=_stuck_engine),
-    ), patch(
-        "janus_graph.daemon.http_search_memory_handler._ENGINE_CALL_TIMEOUT_SEC",
-        0.05,  # 50ms — fast test
+    with (
+        patch(
+            "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
+            new=AsyncMock(side_effect=_stuck_engine),
+        ),
+        patch(
+            "janus_graph.daemon.http_search_memory_handler._ENGINE_CALL_TIMEOUT_SEC",
+            0.05,  # 50ms — fast test
+        ),
     ):
         req = _make_request(ctx, "query=Thuy%20Vi")
         resp = await search_memory_handler(req)
@@ -636,10 +623,11 @@ async def test_success_response_degraded_is_false_documented(
     """
     ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
     engine_response = {
-        "success": True, "group_id": "graphiti_memory",
-        "query": "Thuy Vi", "count": 1,
-        "results": [{"fact": "test", "name": "Thúy Vi",
-                     "valid_at": "", "invalid_at": ""}],
+        "success": True,
+        "group_id": "graphiti_memory",
+        "query": "Thuy Vi",
+        "count": 1,
+        "results": [{"fact": "test", "name": "Thúy Vi", "valid_at": "", "invalid_at": ""}],
     }
     with patch(
         "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
@@ -677,14 +665,10 @@ async def test_rate_limiter_lru_eviction_bounds_memory():
         f"(cap was {bucket._MAX_KEYS}). LRU eviction did not fire."
     )
     # Most recent IP must still be there.
-    assert "ip_19" in bucket._hits, (
-        "Most recent key should never be evicted (used immediately)."
-    )
+    assert "ip_19" in bucket._hits, "Most recent key should never be evicted (used immediately)."
     # Earliest IP MUST have been evicted (it was inserted when dict
     # was empty, then 19 more came in).
-    assert "ip_0" not in bucket._hits, (
-        "Oldest key should be LRU-evicted when bucket is full."
-    )
+    assert "ip_0" not in bucket._hits, "Oldest key should be LRU-evicted when bucket is full."
 
 
 # ─── v0.5.0.1 Fix #2: F4 HTTP bind defaults to 127.0.0.1 ───────────────
@@ -697,9 +681,9 @@ def test_httpsettings_default_host_is_loopback():
     http_server.py with an executable tripwire.
     """
     from janus_graph.config import HTTPSettings
+
     h = HTTPSettings()
     assert h.host == "127.0.0.1", (
         "F4: HTTPSettings.host default must be loopback. "
         "Changing to 0.0.0.0 exposes the daemon to the network."
     )
-

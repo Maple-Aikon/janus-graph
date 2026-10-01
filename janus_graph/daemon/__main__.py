@@ -40,8 +40,10 @@ def main() -> int:
     _configure_logging()
     settings = JanusSettings()
     from ..config import _resolve_home
+
     home = _resolve_home()
     import os as _os
+
     logging.getLogger("janus_graph.daemon").info(
         "JANUS_GRAPH_HOME=%s (resolved from %s)",
         home,

@@ -9,7 +9,12 @@ from unittest.mock import MagicMock, patch
 
 from janus_graph.cli.main import build_parser, run_cli
 from janus_graph.config import JanusSettings
-from janus_graph.migrate import convert_legacy_dict, json_to_yaml, snapshot_database, rollback_database
+from janus_graph.migrate import (
+    convert_legacy_dict,
+    json_to_yaml,
+    snapshot_database,
+    rollback_database,
+)
 from janus_graph.pipeline.queue import EpisodeQueue
 
 
@@ -60,8 +65,19 @@ def test_build_parser():
 def test_migrate_convert_legacy_dict():
     legacy = {
         "database": {"host": "10.0.0.1", "port": 6380, "database": "test_db"},
-        "llm": {"api_base": "http://llm:4000/v1", "model": "gpt-4o", "api_key": "sk-test", "temperature": 0.2, "max_tokens": 2048},
-        "embedding": {"api_base": "http://emb:8081/v1", "model": "nomic-v2", "api_key": "sk-emb", "embedding_dim": 768},
+        "llm": {
+            "api_base": "http://llm:4000/v1",
+            "model": "gpt-4o",
+            "api_key": "sk-test",
+            "temperature": 0.2,
+            "max_tokens": 2048,
+        },
+        "embedding": {
+            "api_base": "http://emb:8081/v1",
+            "model": "nomic-v2",
+            "api_key": "sk-emb",
+            "embedding_dim": 768,
+        },
     }
     converted = convert_legacy_dict(legacy)
     assert converted["engine"]["host"] == "10.0.0.1"
@@ -76,10 +92,14 @@ def test_migrate_json_to_yaml(temp_dir: Path):
     j_file = temp_dir / "legacy.json"
     y_file = temp_dir / "out.yaml"
 
-    j_file.write_text(json.dumps({
-        "database": {"host": "localhost", "port": 6379, "database": "janus_test"},
-        "llm": {"api_base": "http://localhost:4000", "model": "test-model"},
-    }))
+    j_file.write_text(
+        json.dumps(
+            {
+                "database": {"host": "localhost", "port": 6379, "database": "janus_test"},
+                "llm": {"api_base": "http://localhost:4000", "model": "test-model"},
+            }
+        )
+    )
 
     res = json_to_yaml(j_file, y_file)
     assert y_file.exists()
@@ -103,6 +123,7 @@ def test_cli_doctor(temp_dir: Path, capsys):
 
 def test_cli_queue_commands(temp_dir: Path, capsys):
     import asyncio
+
     db_path = temp_dir / "episodes.db"
     cfg = JanusSettings()
     cfg.pipeline.queue_db_path = str(db_path)
@@ -167,6 +188,7 @@ def test_cli_snapshot_command(temp_dir: Path, capsys):
     cfg.pipeline.queue_db_path = str(db_path)
 
     import sqlite3
+
     conn = sqlite3.connect(str(db_path))
     conn.execute(
         "CREATE TABLE IF NOT EXISTS episodes (episode_id TEXT PRIMARY KEY, content TEXT, status TEXT, attempt_count INTEGER DEFAULT 0, last_error TEXT)"
@@ -191,6 +213,7 @@ def test_cli_rollback_command(temp_dir: Path, capsys):
     cfg = JanusSettings()
 
     import sqlite3
+
     conn = sqlite3.connect(str(db_path))
     conn.execute(
         "CREATE TABLE IF NOT EXISTS episodes (episode_id TEXT PRIMARY KEY, content TEXT, status TEXT, attempt_count INTEGER DEFAULT 0, last_error TEXT)"

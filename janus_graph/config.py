@@ -32,6 +32,7 @@ logger = logging.getLogger("janus_graph.config")
 
 class EngineConfig(BaseModel):
     """FalkorDB / Redis engine settings."""
+
     host: str = "127.0.0.1"
     port: int = 6379
     bin_dir: str = "./bin"
@@ -58,6 +59,7 @@ class LLMConfig(BaseModel):
     invocations, or graphiti_core internals that bypass our instance builder
     cannot leak the wrong model name.
     """
+
     provider: str = "openai"
     model: str = "free-ais"
     base_url: str = "http://127.0.0.1:4000/v1"
@@ -68,6 +70,7 @@ class LLMConfig(BaseModel):
 
 class EmbeddingConfig(BaseModel):
     """Embedding model parameters."""
+
     provider: str = "openai"
     model: str = "nomic-embed-text-v2"
     base_url: str = "http://127.0.0.1:8081/v1"
@@ -77,6 +80,7 @@ class EmbeddingConfig(BaseModel):
 
 class GraphitiConfig(BaseModel):
     """Graphiti memory configuration."""
+
     group_id: str = "graphiti_memory"
     llm: LLMConfig = Field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
@@ -84,6 +88,7 @@ class GraphitiConfig(BaseModel):
 
 class DreamConfig(BaseModel):
     """Dream mode memory consolidation settings."""
+
     enabled: bool = True
     force_clustering: bool = False
 
@@ -103,16 +108,16 @@ class DlqReplayConfig(BaseModel):
       - ``BUDGET_EXCEEDED`` — LiteLLM $5/day cap, won't reset until next day
       - ``UNAVAILABLE_503`` — provider outage, retrying makes things worse
     """
+
     enabled: bool = True
     limit: int = 100
-    classes: List[str] = Field(
-        default_factory=lambda: ["SCHEMA_DRIFT", "TIMEOUT"]
-    )
+    classes: List[str] = Field(default_factory=lambda: ["SCHEMA_DRIFT", "TIMEOUT"])
     min_age_sec: int = 60  # don't replay rows that just landed in DLQ
 
 
 class PipelineConfig(BaseModel):
     """Pipeline and queue settings."""
+
     queue_db_path: str = "./data/episodes.db"
     worker_concurrency: int = 6
     max_attempts: int = 3
@@ -125,6 +130,7 @@ class PipelineConfig(BaseModel):
 
 class HeuristicsConfig(BaseModel):
     """Schema repair & heuristic registry settings."""
+
     auto_repair: bool = True
     active_rules: List[str] = Field(
         default_factory=lambda: ["edge_duplicate", "extracted_edges", "node_resolutions"]
@@ -135,6 +141,7 @@ class HeuristicsConfig(BaseModel):
 
 class EmbedCacheConfig(BaseModel):
     """Embedding cache configuration."""
+
     enabled: bool = True
     max_size: int = 10000
     eviction: Literal["lru", "fifo"] = "lru"
@@ -143,6 +150,7 @@ class EmbedCacheConfig(BaseModel):
 
 class CacheConfig(BaseModel):
     """Cache configuration namespace."""
+
     embed: EmbedCacheConfig = Field(default_factory=EmbedCacheConfig)
 
 
@@ -245,6 +253,7 @@ class ReportSinksConfig(BaseModel):
 
 class ReportConfig(BaseModel):
     """Multi-channel reporting configuration."""
+
     min_severity: str = "info"
     sinks: ReportSinksConfig = Field(default_factory=ReportSinksConfig)
 
@@ -260,8 +269,9 @@ class SearchConfig(BaseModel):
         2. YAML key              ``search.sim_min_score``
         3. class default         see below
     """
+
     sim_min_score: float = 0.6  # mirrors graphiti_core DEFAULT_MIN_SCORE
-    mmr_lambda: float = 0.5     # mirrors graphiti_core DEFAULT_MMR_LAMBDA
+    mmr_lambda: float = 0.5  # mirrors graphiti_core DEFAULT_MMR_LAMBDA
     # MMR scores are NOT in [0,1]. The formula is
     #   mmr_lambda * cos(query, cand) + (mmr_lambda - 1) * max_sim
     # so with mmr_lambda < 1 the second term is negative and the score
@@ -345,9 +355,7 @@ class SearchConfig(BaseModel):
         try:
             return float(s)
         except (TypeError, ValueError):
-            logger.warning(
-                "search.cosine_gate_min=%r is not numeric; treating the gate as OFF", v
-            )
+            logger.warning("search.cosine_gate_min=%r is not numeric; treating the gate as OFF", v)
             return None
 
 
@@ -362,9 +370,10 @@ class FalkorCircuitSettings(BaseModel):
         2. YAML key              ``daemon.falkor_circuit.failure_threshold``
         3. class default         see below
     """
-    failure_threshold: int = 3        # consecutive failures → OPEN
-    reset_timeout_sec: int = 60       # OPEN → HALF_OPEN wait
-    half_open_max_probes: int = 1     # HALF_OPEN probe budget
+
+    failure_threshold: int = 3  # consecutive failures → OPEN
+    reset_timeout_sec: int = 60  # OPEN → HALF_OPEN wait
+    half_open_max_probes: int = 1  # HALF_OPEN probe budget
 
 
 class FalkorRestartPolicySettings(BaseModel):
@@ -379,12 +388,14 @@ class FalkorRestartPolicySettings(BaseModel):
     enters FATAL_DEGRADED and refuses further restarts until operator
     intervention (manual ``pmc restart janus-graph`` clears state).
     """
-    cooldown_sec: int = 60        # minimum gap between restarts
-    max_per_hour: int = 5         # rolling 1-hour rate-limit
+
+    cooldown_sec: int = 60  # minimum gap between restarts
+    max_per_hour: int = 5  # rolling 1-hour rate-limit
 
 
 class HTTPSettings(BaseModel):
     """aiohttp HTTP server bind settings (Phase 2 PR scope)."""
+
     host: str = "127.0.0.1"
     port: int = 8765
 
@@ -398,6 +409,7 @@ class DaemonSettings(BaseModel):
     B3 hard rule: cron_loop NOT shipped in Phase 2/3 (gated by
     daemon.cron_enabled=true, deferred to Phase 4).
     """
+
     falkor_circuit: FalkorCircuitSettings = Field(default_factory=FalkorCircuitSettings)
     falkor_restart_policy: FalkorRestartPolicySettings = Field(
         default_factory=FalkorRestartPolicySettings,
@@ -564,6 +576,7 @@ def _apply_home_relative_paths(cfg: "JanusSettings", home: Path) -> None:
 
 class JanusSettings(BaseSettings):
     """Main Janus-Graph Configuration Root."""
+
     engine: EngineConfig = Field(default_factory=EngineConfig)
     graphiti: GraphitiConfig = Field(default_factory=GraphitiConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
@@ -595,6 +608,7 @@ class JanusSettings(BaseSettings):
             DaemonLockSettings,
             DaemonSearchGraphSettings,
         )
+
         if self.daemon.lock is None:
             object.__setattr__(self.daemon, "lock", DaemonLockSettings())
         if self.daemon.search_graph is None:
@@ -629,17 +643,20 @@ def load_config(config_path: Optional[str | Path] = None) -> JanusSettings:
                 with open(p, "r", encoding="utf-8") as f:
                     loaded = yaml.safe_load(f)
                     if isinstance(loaded, dict):
-                        if "graphiti" not in loaded and ("llm" in loaded or "server" in loaded or "database" in loaded):
+                        if "graphiti" not in loaded and (
+                            "llm" in loaded or "server" in loaded or "database" in loaded
+                        ):
                             from .migrate import convert_legacy_dict
+
                             return JanusSettings(**convert_legacy_dict(loaded))
                         return JanusSettings(**loaded)
             elif p.suffix == ".json":
                 from .migrate import convert_legacy_dict
+
                 with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     return JanusSettings(**convert_legacy_dict(data))
     return JanusSettings()
-
 
 
 def resolve_search_params(cfg: JanusSettings) -> Tuple[float, float]:
@@ -663,13 +680,19 @@ def resolve_search_params(cfg: JanusSettings) -> Tuple[float, float]:
         except (TypeError, ValueError):
             logger.warning(
                 "search param %s=%r is not numeric; falling back to %s",
-                name, raw, cfg_value,
+                name,
+                raw,
+                cfg_value,
             )
             return cfg_value
         if v != v or v < lo or v > hi:  # NaN check + range check
             logger.warning(
                 "search param %s=%s out of range [%s, %s]; falling back to %s",
-                name, v, lo, hi, cfg_value,
+                name,
+                v,
+                lo,
+                hi,
+                cfg_value,
             )
             return cfg_value
         return v
@@ -708,13 +731,15 @@ def resolve_reranker_min_score(cfg: JanusSettings) -> float:
     except (TypeError, ValueError):
         logger.warning(
             "search param reranker_min_score=%r is not numeric; falling back to %s",
-            raw, fallback,
+            raw,
+            fallback,
         )
         return fallback
     if v != v or v < -2.0 or v > 1.0:  # NaN check + range check
         logger.warning(
             "search param reranker_min_score=%s out of range [-2.0, 1.0]; falling back to %s",
-            v, fallback,
+            v,
+            fallback,
         )
         return fallback
     if v == 0.0:
@@ -767,7 +792,8 @@ def resolve_cosine_gate_min(cfg: JanusSettings) -> Optional[float]:
     except (TypeError, ValueError):
         logger.warning(
             "search param cosine_gate_min=%r is not numeric; falling back to %r",
-            raw, fallback,
+            raw,
+            fallback,
         )
         return _validated(fallback)
     return _validated(v)
@@ -788,8 +814,7 @@ def _validated(v: Optional[float]) -> Optional[float]:
         return None
     if v != v or v < -1.0 or v > 1.0:  # NaN check + range check
         logger.warning(
-            "search param cosine_gate_min=%s out of range [-1.0, 1.0]; "
-            "disabling the gate",
+            "search param cosine_gate_min=%s out of range [-1.0, 1.0]; disabling the gate",
             v,
         )
         return None
@@ -813,13 +838,15 @@ def resolve_cosine_gate_overfetch(cfg: JanusSettings) -> int:
     except (TypeError, ValueError):
         logger.warning(
             "search param cosine_gate_overfetch=%r is not an integer; falling back to %s",
-            raw, fallback,
+            raw,
+            fallback,
         )
         return fallback
     if v < 1 or v > 10:
         logger.warning(
             "search param cosine_gate_overfetch=%s out of range [1, 10]; falling back to %s",
-            v, fallback,
+            v,
+            fallback,
         )
         return fallback
     return v
@@ -857,6 +884,7 @@ def _bind_phase3_forward_refs() -> None:
     #    Without this, ``JanusSettings(...)`` fails when it tries to
     #    instantiate the ``daemon`` field with unresolved forward refs.
     from janus_graph.config import DaemonSettings  # local import: avoid cycle
+
     DaemonSettings.model_rebuild(
         _types_namespace={
             "DaemonLockSettings": DaemonLockSettings,

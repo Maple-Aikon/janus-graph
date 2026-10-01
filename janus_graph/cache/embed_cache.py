@@ -60,7 +60,9 @@ class EmbedCache(EmbedderClient):
         # Fallback for non-single-text / token ID inputs
         if hasattr(self.inner, "create"):
             return await self.inner.create(input_data)
-        raise AttributeError("Inner embedder does not support non-text inputs without 'create' method")
+        raise AttributeError(
+            "Inner embedder does not support non-text inputs without 'create' method"
+        )
 
     async def create_batch(self, input_data_list: list[str]) -> list[list[float]]:
         if not input_data_list:

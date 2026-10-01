@@ -25,7 +25,9 @@ class ReportDispatcher:
         self.sinks = sinks or []
 
     @classmethod
-    def from_settings(cls, settings: Optional[Union[JanusSettings, Settings]] = None) -> ReportDispatcher:
+    def from_settings(
+        cls, settings: Optional[Union[JanusSettings, Settings]] = None
+    ) -> ReportDispatcher:
         cfg = settings or load_config()
         sinks: List[BaseSink] = []
 
@@ -39,21 +41,28 @@ class ReportDispatcher:
                     )
                 )
             if cfg.report.sinks.cli.enabled:
-                sinks.append(CLISink(format_type=cfg.report.sinks.cli.format, min_severity=getattr(cfg.report.sinks.cli, "min_severity", cfg.report.min_severity)))
+                sinks.append(
+                    CLISink(
+                        format_type=cfg.report.sinks.cli.format,
+                        min_severity=getattr(
+                            cfg.report.sinks.cli, "min_severity", cfg.report.min_severity
+                        ),
+                    )
+                )
             if cfg.report.sinks.telegram.enabled:
                 sinks.append(
                     TelegramSink(
                         bot_token=cfg.report.sinks.telegram.bot_token,
                         chat_id=cfg.report.sinks.telegram.chat_id,
-                        min_severity=getattr(cfg.report.sinks.telegram, "min_severity", cfg.report.min_severity),
+                        min_severity=getattr(
+                            cfg.report.sinks.telegram, "min_severity", cfg.report.min_severity
+                        ),
                     )
                 )
             if cfg.report.sinks.pipe.enabled:
                 pipe_cfg = cfg.report.sinks.pipe
                 if not pipe_cfg.command:
-                    logger.warning(
-                        "PipeSink enabled but `command` is empty in config — skipping"
-                    )
+                    logger.warning("PipeSink enabled but `command` is empty in config — skipping")
                 else:
                     cwd = pipe_cfg.cwd or None
                     env = dict(pipe_cfg.env) if pipe_cfg.env else None
@@ -74,7 +83,9 @@ class ReportDispatcher:
                         url=cfg.report.sinks.webhook.url,
                         secret_token=cfg.report.sinks.webhook.secret_token,
                         secret_header=cfg.report.sinks.webhook.secret_header,
-                        min_severity=getattr(cfg.report.sinks.webhook, "min_severity", cfg.report.min_severity),
+                        min_severity=getattr(
+                            cfg.report.sinks.webhook, "min_severity", cfg.report.min_severity
+                        ),
                     )
                 )
         elif isinstance(cfg, Settings):
@@ -84,9 +95,15 @@ class ReportDispatcher:
             if "cli" in cfg.report.sinks:
                 sinks.append(CLISink(subprocess_method=cfg.report.cli.pipe_subprocess_method))
             if cfg.report.telegram.enabled or "telegram" in cfg.report.sinks:
-                sinks.append(TelegramSink(bot_token=cfg.report.telegram.bot_token, chat_id=cfg.report.telegram.chat_id))
+                sinks.append(
+                    TelegramSink(
+                        bot_token=cfg.report.telegram.bot_token, chat_id=cfg.report.telegram.chat_id
+                    )
+                )
             if cfg.report.webhook.enabled or "webhook" in cfg.report.sinks:
-                sinks.append(WebhookSink(url=cfg.report.webhook.url, secret_token=cfg.report.webhook.secret))
+                sinks.append(
+                    WebhookSink(url=cfg.report.webhook.url, secret_token=cfg.report.webhook.secret)
+                )
         return cls(sinks=sinks)
 
     async def emit(self, event: ReportEvent) -> None:

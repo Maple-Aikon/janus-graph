@@ -35,9 +35,7 @@ async def run_cron_sweep(
     """Execute a full reaper + worker sweep over pending queue records."""
     cfg = settings or load_config()
     actual_batch_size = (
-        batch_size
-        if (batch_size is not None and batch_size > 0)
-        else cfg.pipeline.drain_batch_size
+        batch_size if (batch_size is not None and batch_size > 0) else cfg.pipeline.drain_batch_size
     )
     actual_concurrency = (
         getattr(cfg.pipeline, "worker_concurrency", None)
@@ -46,12 +44,18 @@ async def run_cron_sweep(
     ) or WORKER_CONCURRENCY
     actual_record_timeout = (
         float(getattr(cfg.pipeline, "attempt_timeout_sec", None))
-        if (record_timeout_sec == PER_RECORD_TIMEOUT_SECONDS and hasattr(cfg.pipeline, "attempt_timeout_sec"))
+        if (
+            record_timeout_sec == PER_RECORD_TIMEOUT_SECONDS
+            and hasattr(cfg.pipeline, "attempt_timeout_sec")
+        )
         else record_timeout_sec
     )
     actual_sweep_timeout = (
         float(getattr(cfg.pipeline, "attempt_timeout_sec", None))
-        if (sweep_timeout_sec == SWEEP_TIMEOUT_SECONDS and hasattr(cfg.pipeline, "attempt_timeout_sec"))
+        if (
+            sweep_timeout_sec == SWEEP_TIMEOUT_SECONDS
+            and hasattr(cfg.pipeline, "attempt_timeout_sec")
+        )
         else sweep_timeout_sec
     )
     actual_reap_timeout = (
@@ -60,9 +64,7 @@ async def run_cron_sweep(
         else PROCESSING_TIMEOUT_SECONDS
     )
     db_path = (
-        cfg.pipeline.queue_db_path
-        if hasattr(cfg.pipeline, "queue_db_path")
-        else "./data/queue.db"
+        cfg.pipeline.queue_db_path if hasattr(cfg.pipeline, "queue_db_path") else "./data/queue.db"
     )
     queue = EpisodeQueue(str(db_path))
     worker = EpisodeWorker(queue, cfg)
@@ -83,7 +85,11 @@ async def run_cron_sweep(
     failed_count = 0
 
     if records:
-        logger.info("Claimed %d records for processing (concurrency=%d)", processed_count, actual_concurrency)
+        logger.info(
+            "Claimed %d records for processing (concurrency=%d)",
+            processed_count,
+            actual_concurrency,
+        )
         sem = asyncio.Semaphore(actual_concurrency)
 
         async def _safe_process(rec: EpisodeRecord):

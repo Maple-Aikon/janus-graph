@@ -26,6 +26,7 @@ class BaseSink(ABC):
         """Protocol compliance bridge for raw event dicts."""
         # Construct ReportEvent if needed
         from ..models import ReportEvent, ReportSeverity
+
         severity_str = event.get("severity", "info")
         try:
             severity = ReportSeverity(severity_str)

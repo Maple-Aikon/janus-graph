@@ -7,6 +7,7 @@ search_memory tool.
 v0.4.6: introduced alongside ``SearchConfig`` so operators can tune the
 graphiti-core SearchConfig without rebuilding the wheel.
 """
+
 from __future__ import annotations
 
 import os
@@ -131,6 +132,7 @@ def test_resolve_search_params_boundary_valid():
 def test_resolve_search_params_logs_warning_on_invalid(caplog):
     """Fail-soft path emits a warning log with parameter name."""
     import logging
+
     caplog.set_level(logging.WARNING, logger="janus_graph.config")
     s = JanusSettings()  # clean env first
     os.environ["JANUS_SEARCH__SIM_MIN_SCORE"] = "garbage"

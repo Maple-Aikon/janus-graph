@@ -233,6 +233,7 @@ async def test_probe_warming_up_does_not_trip_breaker(fast_breaker):
 
     async def fake_warming():
         return ProbeState.WARMING_UP
+
     supervisor._probe_redis = fake_warming  # type: ignore[assignment]
 
     await supervisor.probe()

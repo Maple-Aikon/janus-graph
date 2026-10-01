@@ -15,8 +15,11 @@ from janus_graph.pipeline.queue import EpisodeQueue
 def test_is_read_only_cypher():
     # Safe queries
     assert is_read_only_cypher("MATCH (n) RETURN n")[0] is True
-    assert is_read_only_cypher("MATCH (e:Entity)-[r]->(o) RETURN e.name, type(r), o.name LIMIT 10")[0] is True
-    
+    assert (
+        is_read_only_cypher("MATCH (e:Entity)-[r]->(o) RETURN e.name, type(r), o.name LIMIT 10")[0]
+        is True
+    )
+
     # Mutating queries
     assert is_read_only_cypher("CREATE (n:Test {name: 'foo'})")[0] is False
     assert is_read_only_cypher("MATCH (n) DELETE n")[0] is False
@@ -38,11 +41,11 @@ async def test_mcp_server_tools_registered(temp_dir: Path):
     db_path = temp_dir / "episodes.db"
     cfg = JanusSettings()
     cfg.pipeline.queue_db_path = str(db_path)
-    
+
     mcp = create_mcp_server(cfg)
     tools = await mcp.list_tools()
     tool_names = [t.name for t in tools]
-    
+
     expected = [
         "add_episode",
         "queue_status",
@@ -65,13 +68,12 @@ async def test_mcp_add_episode_and_status(temp_dir: Path):
     db_path = temp_dir / "episodes.db"
     cfg = JanusSettings()
     cfg.pipeline.queue_db_path = str(db_path)
-    
+
     mcp = create_mcp_server(cfg)
-    
+
     # Test add_episode
     res = await mcp.call_tool(
-        "add_episode",
-        {"content": "User likes matcha latte", "name": "Pref episode"}
+        "add_episode", {"content": "User likes matcha latte", "name": "Pref episode"}
     )
     assert res.is_error is False
     struct = _get_struct(res)
@@ -96,17 +98,22 @@ async def test_mcp_add_episode_and_status(temp_dir: Path):
 @pytest.mark.asyncio
 async def test_mcp_cache_and_report_stats(temp_dir: Path):
     log_path = temp_dir / "reports.jsonl"
-    log_path.write_text(json.dumps({
-        "timestamp": "2026-08-28T21:00:00Z",
-        "kind": "cron_sweep",
-        "severity": "info",
-        "summary": "All good in MCP test",
-    }) + "\n")
-    
+    log_path.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-08-28T21:00:00Z",
+                "kind": "cron_sweep",
+                "severity": "info",
+                "summary": "All good in MCP test",
+            }
+        )
+        + "\n"
+    )
+
     cfg = JanusSettings()
     cfg.report.sinks.file.path = str(log_path)
     mcp = create_mcp_server(cfg)
-    
+
     # Test cache_stats
     c_res = await mcp.call_tool("cache_stats", {})
     c_struct = _get_struct(c_res)
@@ -124,7 +131,7 @@ async def test_mcp_cache_and_report_stats(temp_dir: Path):
 async def test_mcp_cypher_query_blocks_mutation(temp_dir: Path):
     cfg = JanusSettings()
     mcp = create_mcp_server(cfg)
-    
+
     res = await mcp.call_tool("cypher_query", {"query": "CREATE (n:Node) RETURN n"})
     struct = _get_struct(res)
     assert struct["success"] is False

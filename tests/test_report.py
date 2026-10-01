@@ -11,7 +11,13 @@ from janus_graph.report.sinks.cli import CLISink
 from janus_graph.report.sinks.telegram import TelegramSink
 from janus_graph.report.sinks.pipe import PipeSink
 from janus_graph.report.sinks.webhook import WebhookSink
-from janus_graph.core.contracts import Settings, ReportSettings, CliReportSettings, TelegramReportSettings, WebhookReportSettings
+from janus_graph.core.contracts import (
+    Settings,
+    ReportSettings,
+    CliReportSettings,
+    TelegramReportSettings,
+    WebhookReportSettings,
+)
 
 
 @pytest.mark.asyncio
@@ -45,7 +51,9 @@ async def test_file_sink_rotation(temp_dir):
 
     # Emit multiple events to exceed 100 bytes
     for i in range(5):
-        await sink.emit(ReportEvent(kind="test", severity=ReportSeverity.INFO, summary=f"Event {i}" * 5))
+        await sink.emit(
+            ReportEvent(kind="test", severity=ReportSeverity.INFO, summary=f"Event {i}" * 5)
+        )
 
     assert report_file.exists()
     rotated = temp_dir / "rotating_report.jsonl.1"
@@ -92,7 +100,7 @@ async def test_telegram_sink_log_mode():
 async def test_telegram_sink_api_mode():
     sink = TelegramSink(bot_token="test_token", chat_id="12345")
     event = ReportEvent(kind="tg_api", severity=ReportSeverity.ERROR, summary="Test error")
-    
+
     mock_response = MagicMock()
     mock_response.read.return_value = b'{"ok": true}'
     mock_response.__enter__.return_value = mock_response
@@ -114,7 +122,9 @@ async def test_webhook_sink():
 @pytest.mark.asyncio
 async def test_webhook_sink_emit():
     sink = WebhookSink(url="http://example.com/webhook", secret_token="my_secret")
-    event = ReportEvent(kind="webhook_test", severity=ReportSeverity.INFO, summary="Webhook payload")
+    event = ReportEvent(
+        kind="webhook_test", severity=ReportSeverity.INFO, summary="Webhook payload"
+    )
 
     mock_response = MagicMock()
     mock_response.read.return_value = b'{"received": true}'
@@ -148,12 +158,15 @@ async def test_report_dispatcher(temp_dir):
 async def test_report_dispatcher_error_isolation():
     async def _failing_emit(event):
         raise RuntimeError("Sink explosion")
-    
+
     failing_sink = MagicMock()
     failing_sink.emit = _failing_emit
-    
+
     working_sink = MagicMock()
-    async def _ok(event): pass
+
+    async def _ok(event):
+        pass
+
     working_sink.emit = _ok
 
     dispatcher = ReportDispatcher(sinks=[failing_sink, working_sink])
@@ -174,7 +187,9 @@ def test_report_dispatcher_from_settings(temp_dir):
     dispatcher = ReportDispatcher.from_settings(settings)
     assert len(dispatcher.sinks) == 4
 
+
 # v0.6.3 — Generic PipeSink (CLI pipe for cron + dream reports).
+
 
 def _make_fake_script(tmp_path, body=None):
     if body is None:
@@ -224,7 +239,9 @@ async def test_pipe_sink_appends_extra_args(tmp_path):
         extra_args=["--channel"],
         use_stdin=True,
     )
-    event = ReportEvent(kind="dream_consolidation", severity=ReportSeverity.INFO, summary="dream done")
+    event = ReportEvent(
+        kind="dream_consolidation", severity=ReportSeverity.INFO, summary="dream done"
+    )
 
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -297,6 +314,7 @@ async def test_pipe_sink_nonzero_exit_logs_warning(tmp_path, caplog):
     event = ReportEvent(kind="cron", severity=ReportSeverity.INFO, summary="x")
 
     import logging
+
     with caplog.at_level(logging.WARNING, logger="janus_graph.report.pipe"):
         await sink.emit(event)
     assert "rc=" in caplog.text
@@ -311,6 +329,7 @@ async def test_pipe_sink_timeout_does_not_crash(tmp_path, caplog):
     event = ReportEvent(kind="slow", severity=ReportSeverity.INFO, summary="slow op")
 
     import logging
+
     with caplog.at_level(logging.WARNING, logger="janus_graph.report.pipe"):
         await sink.emit(event)
     assert "timeout" in caplog.text
@@ -320,6 +339,7 @@ async def test_pipe_sink_timeout_does_not_crash(tmp_path, caplog):
 async def test_pipe_sink_in_dispatcher_with_pydantic_settings(temp_dir):
     """PipeSink must register via ReportDispatcher.from_settings(JanusSettings)."""
     from janus_graph.config import JanusSettings, ReportConfig, ReportSinksConfig, PipeSinkConfig
+
     settings = JanusSettings(
         report=ReportConfig(
             sinks=ReportSinksConfig(
@@ -346,6 +366,7 @@ async def test_pipe_sink_in_dispatcher_with_pydantic_settings(temp_dir):
 async def test_pipe_sink_dispatcher_skips_when_command_empty(temp_dir):
     """If `pipe.enabled=true` but `command` is empty, dispatcher must skip."""
     from janus_graph.config import JanusSettings, ReportConfig, ReportSinksConfig, PipeSinkConfig
+
     settings = JanusSettings(
         report=ReportConfig(
             sinks=ReportSinksConfig(

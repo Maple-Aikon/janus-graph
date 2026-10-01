@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 
 class QuirksLogger:
     """Logs schema validation failures and repair actions for audit.
-    
+
     Implements QuirksLogger Protocol from core.contracts.
     """
 

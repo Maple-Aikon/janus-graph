@@ -68,9 +68,7 @@ class SchemaRepairingLLMClient(LLMClient):
         max_tokens: int = DEFAULT_MAX_TOKENS,
         model_size: ModelSize = ModelSize.medium,
     ) -> Dict[str, Any]:
-        return await self.inner._generate_response(
-            messages, response_model, max_tokens, model_size
-        )
+        return await self.inner._generate_response(messages, response_model, max_tokens, model_size)
 
     # ------------------------------------------------------------------ #
     # Public entrypoint override: repair payloads that would otherwise raise

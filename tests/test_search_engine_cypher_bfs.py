@@ -165,9 +165,7 @@ async def test_query_is_sent_with_graph_query_and_compact_flag():
 async def test_execute_error_becomes_falkor_down():
     engine = _engine()
     engine._redis = MagicMock()
-    engine._redis.execute_command = AsyncMock(
-        side_effect=ConnectionError("connection refused")
-    )
+    engine._redis.execute_command = AsyncMock(side_effect=ConnectionError("connection refused"))
 
     with pytest.raises(SearchBackendError) as exc:
         await engine._cypher_bfs(_req(["A"]))
@@ -183,14 +181,16 @@ async def test_happy_path_builds_fact_row():
     """A well-formed 6-column row becomes one FactRow."""
     engine = _engine()
     result = _compact_result(
-        [[
-            [2, "MENTIONS"],                 # edge_type
-            [3, 2],                          # hop_distance
-            [6, ["Seed", "Mid", "Target"]],  # path_nodes
-            [2, "Fact text here"],           # first_summary
-            [2, "Seed"],                     # seed_in_path
-            [2, "Target"],                   # target_in_path
-        ]]
+        [
+            [
+                [2, "MENTIONS"],  # edge_type
+                [3, 2],  # hop_distance
+                [6, ["Seed", "Mid", "Target"]],  # path_nodes
+                [2, "Fact text here"],  # first_summary
+                [2, "Seed"],  # seed_in_path
+                [2, "Target"],  # target_in_path
+            ]
+        ]
     )
 
     rows = await _run(engine, _req(["Seed"]), result)
@@ -210,10 +210,16 @@ async def test_happy_path_builds_fact_row():
 async def test_multiline_summary_collapses_to_first_nonblank_line():
     engine = _engine()
     result = _compact_result(
-        [[
-            [2, "MENTIONS"], [3, 1], [6, ["A", "B"]],
-            [2, MULTILINE_SUMMARY], [2, "A"], [2, "B"],
-        ]]
+        [
+            [
+                [2, "MENTIONS"],
+                [3, 1],
+                [6, ["A", "B"]],
+                [2, MULTILINE_SUMMARY],
+                [2, "A"],
+                [2, "B"],
+            ]
+        ]
     )
 
     rows = await _run(engine, _req(["A"]), result)
@@ -225,10 +231,16 @@ async def test_multiline_summary_collapses_to_first_nonblank_line():
 async def test_blank_summary_rows_are_skipped(summary):
     engine = _engine()
     result = _compact_result(
-        [[
-            [2, "MENTIONS"], [3, 1], [6, ["A", "B"]],
-            [2, summary], [2, "A"], [2, "B"],
-        ]]
+        [
+            [
+                [2, "MENTIONS"],
+                [3, 1],
+                [6, ["A", "B"]],
+                [2, summary],
+                [2, "A"],
+                [2, "B"],
+            ]
+        ]
     )
 
     assert await _run(engine, _req(["A"]), result) == []
@@ -237,11 +249,16 @@ async def test_blank_summary_rows_are_skipped(summary):
 async def test_non_str_summary_is_skipped():
     engine = _engine()
     result = _compact_result(
-        [[
-            [2, "MENTIONS"], [3, 1], [6, ["A", "B"]],
-            [3, 42],           # summary is an int, not a str
-            [2, "A"], [2, "B"],
-        ]]
+        [
+            [
+                [2, "MENTIONS"],
+                [3, 1],
+                [6, ["A", "B"]],
+                [3, 42],  # summary is an int, not a str
+                [2, "A"],
+                [2, "B"],
+            ]
+        ]
     )
 
     assert await _run(engine, _req(["A"]), result) == []
@@ -250,14 +267,16 @@ async def test_non_str_summary_is_skipped():
 async def test_missing_edge_type_defaults_to_relates_to():
     engine = _engine()
     result = _compact_result(
-        [[
-            [5, None],         # edge_type null
-            [3, 1],
-            [6, ["A", "B"]],
-            [2, "Some fact"],
-            [2, "A"],
-            [2, "B"],
-        ]]
+        [
+            [
+                [5, None],  # edge_type null
+                [3, 1],
+                [6, ["A", "B"]],
+                [2, "Some fact"],
+                [2, "A"],
+                [2, "B"],
+            ]
+        ]
     )
 
     rows = await _run(engine, _req(["A"]), result)
@@ -268,14 +287,16 @@ async def test_missing_edge_type_defaults_to_relates_to():
 async def test_null_hop_defaults_to_one():
     engine = _engine()
     result = _compact_result(
-        [[
-            [2, "MENTIONS"],
-            [5, None],         # hop null
-            [6, ["A", "B"]],
-            [2, "Some fact"],
-            [2, "A"],
-            [2, "B"],
-        ]]
+        [
+            [
+                [2, "MENTIONS"],
+                [5, None],  # hop null
+                [6, ["A", "B"]],
+                [2, "Some fact"],
+                [2, "A"],
+                [2, "B"],
+            ]
+        ]
     )
 
     rows = await _run(engine, _req(["A"]), result)
@@ -287,13 +308,16 @@ async def test_source_and_target_fall_back_to_path_nodes():
     """With null seed/target columns, source = path[0] and target = ''."""
     engine = _engine()
     result = _compact_result(
-        [[
-            [2, "MENTIONS"], [3, 1],
-            [6, ["A", "B", "C"]],
-            [2, "Some fact"],
-            [5, None],         # seed_in_path null
-            [5, None],         # target_in_path null
-        ]]
+        [
+            [
+                [2, "MENTIONS"],
+                [3, 1],
+                [6, ["A", "B", "C"]],
+                [2, "Some fact"],
+                [5, None],  # seed_in_path null
+                [5, None],  # target_in_path null
+            ]
+        ]
     )
 
     rows = await _run(engine, _req(["A"]), result)
@@ -305,12 +329,16 @@ async def test_source_and_target_fall_back_to_path_nodes():
 async def test_empty_path_yields_empty_source():
     engine = _engine()
     result = _compact_result(
-        [[
-            [2, "MENTIONS"], [3, 1],
-            [6, []],           # empty path
-            [2, "Some fact"],
-            [5, None], [5, None],
-        ]]
+        [
+            [
+                [2, "MENTIONS"],
+                [3, 1],
+                [6, []],  # empty path
+                [2, "Some fact"],
+                [5, None],
+                [5, None],
+            ]
+        ]
     )
 
     rows = await _run(engine, _req(["A"]), result)
@@ -323,9 +351,14 @@ async def test_short_row_is_skipped_not_fatal():
     """A row with fewer than 6 columns raises on unpack and is caught per-row."""
     engine = _engine()
     result = _compact_result(
-        [[
-            [2, "MENTIONS"], [3, 1], [6, ["A", "B"]], [2, "truncated"],
-        ]]
+        [
+            [
+                [2, "MENTIONS"],
+                [3, 1],
+                [6, ["A", "B"]],
+                [2, "truncated"],
+            ]
+        ]
     )
 
     assert await _run(engine, _req(["A"]), result) == []
@@ -334,13 +367,16 @@ async def test_short_row_is_skipped_not_fatal():
 async def test_non_numeric_hop_is_skipped():
     engine = _engine()
     result = _compact_result(
-        [[
-            [2, "MENTIONS"],
-            [2, "not-a-number"],   # int("not-a-number") raises
-            [6, ["A", "B"]],
-            [2, "Some fact"],
-            [2, "A"], [2, "B"],
-        ]]
+        [
+            [
+                [2, "MENTIONS"],
+                [2, "not-a-number"],  # int("not-a-number") raises
+                [6, ["A", "B"]],
+                [2, "Some fact"],
+                [2, "A"],
+                [2, "B"],
+            ]
+        ]
     )
 
     assert await _run(engine, _req(["A"]), result) == []
@@ -349,23 +385,38 @@ async def test_non_numeric_hop_is_skipped():
 async def test_bad_row_does_not_discard_good_rows():
     """Per-row try/except: one malformed row is dropped, the rest survive."""
     engine = _engine()
-    result = _compact_result([
-        [  # bad: short row
-            [2, "MENTIONS"], [3, 1],
-        ],
-        [  # good
-            [2, "MENTIONS"], [3, 1], [6, ["A", "B"]],
-            [2, "Good fact"], [2, "A"], [2, "B"],
-        ],
-        [  # bad: blank summary
-            [2, "MENTIONS"], [3, 1], [6, ["A", "B"]],
-            [2, "   "], [2, "A"], [2, "B"],
-        ],
-        [  # good
-            [2, "CODE"], [3, 2], [6, ["B", "C"]],
-            [2, "Another good fact"], [2, "B"], [2, "C"],
-        ],
-    ])
+    result = _compact_result(
+        [
+            [  # bad: short row
+                [2, "MENTIONS"],
+                [3, 1],
+            ],
+            [  # good
+                [2, "MENTIONS"],
+                [3, 1],
+                [6, ["A", "B"]],
+                [2, "Good fact"],
+                [2, "A"],
+                [2, "B"],
+            ],
+            [  # bad: blank summary
+                [2, "MENTIONS"],
+                [3, 1],
+                [6, ["A", "B"]],
+                [2, "   "],
+                [2, "A"],
+                [2, "B"],
+            ],
+            [  # good
+                [2, "CODE"],
+                [3, 2],
+                [6, ["B", "C"]],
+                [2, "Another good fact"],
+                [2, "B"],
+                [2, "C"],
+            ],
+        ]
+    )
 
     rows = await _run(engine, _req(["A", "B"]), result)
 
@@ -391,8 +442,6 @@ async def test_non_result_shapes_yield_empty_list(result):
 async def test_rows_key_not_a_list_yields_empty_list():
     engine = _engine()
     engine._redis = MagicMock()
-    engine._redis.execute_command = AsyncMock(
-        return_value=[[[1, "c0"]], "not-a-list-of-rows", []]
-    )
+    engine._redis.execute_command = AsyncMock(return_value=[[[1, "c0"]], "not-a-list-of-rows", []])
 
     assert await engine._cypher_bfs(_req(["A"])) == []

@@ -1,4 +1,5 @@
 """Phase 5: Snapshot, rollback, and data migration ops tests."""
+
 from __future__ import annotations
 
 import json

@@ -60,7 +60,7 @@ class CronLoop:
       .tick_count : int
     """
 
-    DREAM_HOUR_ICT = 2     # 02:30 ICT per ai_cronjob.sh legacy
+    DREAM_HOUR_ICT = 2  # 02:30 ICT per ai_cronjob.sh legacy
     DREAM_MINUTE_ICT = 30
     DREAM_CHECK_INTERVAL_SEC = 60  # check the wall clock once per minute
     # Sweep default 10 min matches cfg.pipeline.cron_interval_min. Tests
@@ -107,7 +107,9 @@ class CronLoop:
         ]
         logger.info(
             "cron_loop: started (sweep_every=%dmin, dream_at=%02d:%02d ICT)",
-            interval_min, self.DREAM_HOUR_ICT, self.DREAM_MINUTE_ICT,
+            interval_min,
+            self.DREAM_HOUR_ICT,
+            self.DREAM_MINUTE_ICT,
         )
 
     async def stop(self) -> None:
@@ -152,8 +154,7 @@ class CronLoop:
             if state == _CIRCUIT_OPEN:
                 self.skipped_circuit_open += 1
                 logger.warning(
-                    "cron_loop: sweep tick SKIPPED — Falkor circuit OPEN "
-                    "(skip_count=%d)",
+                    "cron_loop: sweep tick SKIPPED — Falkor circuit OPEN (skip_count=%d)",
                     self.skipped_circuit_open,
                 )
             else:
@@ -223,9 +224,7 @@ class CronLoop:
 
             # Wait 60s before next check.
             try:
-                await asyncio.wait_for(
-                    self._shutdown.wait(), timeout=self.DREAM_CHECK_INTERVAL_SEC
-                )
+                await asyncio.wait_for(self._shutdown.wait(), timeout=self.DREAM_CHECK_INTERVAL_SEC)
                 return
             except asyncio.TimeoutError:
                 continue
@@ -251,9 +250,17 @@ def _short_stats(stats: Optional[dict]) -> str:
     if not stats:
         return "no stats"
     parts = []
-    for k in ("succeeded", "succeeded_count", "failed", "failed_count",
-              "processed", "phase_2_deduplication", "phase_3_orphan_pruning",
-              "phase_4_dlq_repair", "duration_ms"):
+    for k in (
+        "succeeded",
+        "succeeded_count",
+        "failed",
+        "failed_count",
+        "processed",
+        "phase_2_deduplication",
+        "phase_3_orphan_pruning",
+        "phase_4_dlq_repair",
+        "duration_ms",
+    ):
         if k in stats:
             parts.append(f"{k}={stats[k]}")
     return " ".join(parts) if parts else str(stats)[:200]

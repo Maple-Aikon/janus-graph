@@ -57,9 +57,10 @@ class ProbeState(str, Enum):
     ``CircuitState`` describes the policy decision to probe at all.
     """
 
-    ALIVE = "alive"               # PING → +PONG
-    WARMING_UP = "warming_up"     # PING → -LOADING  (Redis hydrating from disk)
-    DEAD = "dead"                 # connection refused / timeout / parse fail
+    ALIVE = "alive"  # PING → +PONG
+    WARMING_UP = "warming_up"  # PING → -LOADING  (Redis hydrating from disk)
+    DEAD = "dead"  # connection refused / timeout / parse fail
+
 
 # Probe timeout: short enough to avoid blocking /health, long enough to tolerate
 # systemd-style daemon pauses. Tuned via FalkorCircuitSettings.probe_timeout_sec.
@@ -79,6 +80,7 @@ def _redis_ping(host: str, port: int, timeout: float) -> ProbeState:
       - other / OSError / TimeoutError → DEAD
     """
     import socket
+
     try:
         with socket.create_connection((host, port), timeout=timeout) as s:
             s.sendall(b"PING" + bytes([13, 10]))
@@ -102,15 +104,22 @@ def _module_list(host: str, port: int, timeout: float) -> bool:
     "unknown command GRAPH.QUERY" errors.
 
     RESP wire format (minimal):
-      - send: ``MODULE LIST\\
+      - send: ``MODULE LIST\
+\
 ``
-      - recv: ``*N\\
+      - recv: ``*N\
+\
 `` followed by N array elements; each starts with
-        ``*2\\
-$4\\
-name\\
-$N\\
-<name>\\
+        ``*2\
+\
+$4\
+\
+name\
+\
+$N\
+\
+<name>\
+\
 ``
       - bare redis (no falkordb) returns 0 or 1 default module
       - falkordb-loaded redis returns the standard modules + ``falkordb``
@@ -124,6 +133,7 @@ $N\\
     Returns False on any error (timeout, connection refused, malformed reply).
     """
     import socket
+
     try:
         with socket.create_connection((host, port), timeout=timeout) as s:
             s.sendall(b"MODULE LIST" + bytes([13, 10]))
@@ -192,9 +202,7 @@ class DaemonSupervisor:
         Returns True iff server responded PONG within timeout.
         Runs in to_thread to keep async loop responsive.
         """
-        timeout = float(
-            getattr(self._circuit_cfg, "probe_timeout_sec", _DEFAULT_PROBE_TIMEOUT_SEC)
-        )
+        timeout = float(getattr(self._circuit_cfg, "probe_timeout_sec", _DEFAULT_PROBE_TIMEOUT_SEC))
         return await asyncio.to_thread(
             _redis_ping, self._engine.host, int(self._engine.port), timeout
         )
@@ -260,9 +268,7 @@ class DaemonSupervisor:
             DEAD       — connection refused, timeout, PONG missing,
                          OR MODULE LIST missing ``falkordb`` (redislite zombie)
         """
-        timeout = float(
-            getattr(self._circuit_cfg, "probe_timeout_sec", _DEFAULT_PROBE_TIMEOUT_SEC)
-        )
+        timeout = float(getattr(self._circuit_cfg, "probe_timeout_sec", _DEFAULT_PROBE_TIMEOUT_SEC))
         # Step 1: PING (cheap, <1ms typical). If dead here, no need for MODULE LIST.
         ping_state = await asyncio.to_thread(
             _redis_ping, self._engine.host, int(self._engine.port), timeout
@@ -278,7 +284,8 @@ class DaemonSupervisor:
                 "falkordb_supervisor: probe_strict detected redislite-style "
                 "bare redis at %s:%d (PING +PONG but MODULE LIST missing "
                 "falkordb) — reporting DEAD",
-                self._engine.host, self._engine.port,
+                self._engine.host,
+                self._engine.port,
             )
             return ProbeState.DEAD
         return ProbeState.ALIVE

@@ -42,7 +42,7 @@ def _sanitize_int_list(val: Any) -> List[int]:
 
 class EdgeDuplicateRule(HeuristicRule):
     """Repairs EdgeDuplicate payloads where list fields are missing or mis-typed.
-    
+
     Handles:
       - {"properties": {"duplicate_facts": [...], "contradicted_facts": [...]}}
       - Missing one or both of duplicate_facts/contradicted_facts
@@ -65,13 +65,18 @@ class EdgeDuplicateRule(HeuristicRule):
     def can_repair(self, schema_name: str, payload: Any, error: Optional[Exception] = None) -> bool:
         return schema_name in self.target_schema_names
 
-    def repair(self, schema_name: str, payload: Any, error: Optional[Exception] = None) -> Dict[str, Any]:
+    def repair(
+        self, schema_name: str, payload: Any, error: Optional[Exception] = None
+    ) -> Dict[str, Any]:
         if not isinstance(payload, dict):
             return {"duplicate_facts": [], "contradicted_facts": []}
 
         # Unwrap nested 'properties' wrapper if present
         if "properties" in payload and isinstance(payload["properties"], dict):
-            payload = {**payload["properties"], **{k: v for k, v in payload.items() if k != "properties"}}
+            payload = {
+                **payload["properties"],
+                **{k: v for k, v in payload.items() if k != "properties"},
+            }
 
         out: Dict[str, Any] = {}
 
@@ -80,7 +85,13 @@ class EdgeDuplicateRule(HeuristicRule):
         if "duplicate_facts" in payload:
             dup_val = payload["duplicate_facts"]
         else:
-            for src_key in ("duplicate_indices", "duplicates", "dup_idx", "duplicate_fact_ids", "duplicate_ids"):
+            for src_key in (
+                "duplicate_indices",
+                "duplicates",
+                "dup_idx",
+                "duplicate_fact_ids",
+                "duplicate_ids",
+            ):
                 if src_key in payload:
                     dup_val = payload[src_key]
                     break
@@ -92,7 +103,13 @@ class EdgeDuplicateRule(HeuristicRule):
         if "contradicted_facts" in payload:
             contra_val = payload["contradicted_facts"]
         else:
-            for src_key in ("contradicted_indices", "contradictions", "contra_idx", "contradicted_fact_ids", "contradicted_ids"):
+            for src_key in (
+                "contradicted_indices",
+                "contradictions",
+                "contra_idx",
+                "contradicted_fact_ids",
+                "contradicted_ids",
+            ):
                 if src_key in payload:
                     contra_val = payload[src_key]
                     break

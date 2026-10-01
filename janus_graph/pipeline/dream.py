@@ -41,7 +41,9 @@ def bounded_label_propagation(
             curr_community = community_map[uuid_val]
             community_candidates: dict[int, int] = defaultdict(int)
             for neighbor in neighbors:
-                neighbor_uuid = getattr(neighbor, "node_uuid", None) or getattr(neighbor, "uuid", str(neighbor))
+                neighbor_uuid = getattr(neighbor, "node_uuid", None) or getattr(
+                    neighbor, "uuid", str(neighbor)
+                )
                 edge_count = getattr(neighbor, "edge_count", 1)
                 if neighbor_uuid in community_map:
                     community_candidates[community_map[neighbor_uuid]] += edge_count
@@ -77,9 +79,7 @@ async def run_dream_consolidation(
     """Execute Dream Mode memory consolidation phases with full undo log."""
     cfg = settings or load_config()
     db_path = (
-        cfg.pipeline.queue_db_path
-        if hasattr(cfg.pipeline, "queue_db_path")
-        else "./data/queue.db"
+        cfg.pipeline.queue_db_path if hasattr(cfg.pipeline, "queue_db_path") else "./data/queue.db"
     )
     queue = EpisodeQueue(str(db_path))
     dispatcher = ReportDispatcher.from_settings(cfg)

@@ -134,9 +134,15 @@ class EpisodeQueue:
             for name, ddl in (
                 ("idx_status", "CREATE INDEX idx_status ON episodes(status)"),
                 ("idx_enqueued_at", "CREATE INDEX idx_enqueued_at ON episodes(enqueued_at)"),
-                ("idx_last_replay_at", "CREATE INDEX idx_last_replay_at ON episodes(last_replay_at)"),
+                (
+                    "idx_last_replay_at",
+                    "CREATE INDEX idx_last_replay_at ON episodes(last_replay_at)",
+                ),
                 ("idx_dlq_failed_at", "CREATE INDEX idx_dlq_failed_at ON dead_letter(failed_at)"),
-                ("idx_dlq_recovered_at", "CREATE INDEX idx_dlq_recovered_at ON dead_letter(recovered_at)"),
+                (
+                    "idx_dlq_recovered_at",
+                    "CREATE INDEX idx_dlq_recovered_at ON dead_letter(recovered_at)",
+                ),
             ):
                 self._ensure_index_ddl_sync(conn, name, ddl)
             conn.commit()
@@ -309,7 +315,9 @@ class EpisodeQueue:
         def _sync_aborted():
             with self._get_connection() as conn:
                 # Fetch current record for DLQ
-                cur = conn.execute("SELECT payload_json, attempt_count FROM episodes WHERE id = ?", (episode_id, ))
+                cur = conn.execute(
+                    "SELECT payload_json, attempt_count FROM episodes WHERE id = ?", (episode_id,)
+                )
                 row = cur.fetchone()
                 payload_json = row["payload_json"] if row else "{}"
                 attempts = (row["attempt_count"] if row else 0) + 1
@@ -445,7 +453,10 @@ class EpisodeQueue:
 
         def _sync_replay():
             with self._get_connection() as conn:
-                cur = conn.execute("SELECT episode_id, attempt_count FROM dead_letter WHERE episode_id = ?", (episode_id,))
+                cur = conn.execute(
+                    "SELECT episode_id, attempt_count FROM dead_letter WHERE episode_id = ?",
+                    (episode_id,),
+                )
                 dlq_row = cur.fetchone()
                 if not dlq_row:
                     return False
@@ -492,13 +503,13 @@ class EpisodeQueue:
                 where_parts = ["dl.recovered_at IS NULL"]
                 params: List[Any] = []
                 if classes:
-                    class_clauses = " OR ".join(["LOWER(dl.last_error) LIKE LOWER(?)"] * len(classes))
+                    class_clauses = " OR ".join(
+                        ["LOWER(dl.last_error) LIKE LOWER(?)"] * len(classes)
+                    )
                     where_parts.append(f"({class_clauses})")
                     params.extend(f"%{c}%" for c in classes)
                 if min_age_sec > 0:
-                    where_parts.append(
-                        "datetime(dl.failed_at) <= datetime(?, ? || ' seconds')"
-                    )
+                    where_parts.append("datetime(dl.failed_at) <= datetime(?, ? || ' seconds')")
                     params.extend([now, f"-{min_age_sec}"])
                 where_sql = " AND ".join(where_parts)
 
@@ -574,7 +585,9 @@ class EpisodeQueue:
         with self._get_connection() as conn:
             cursor = conn.execute("SELECT status, COUNT(*) as count FROM episodes GROUP BY status")
             stats = {row["status"]: row["count"] for row in cursor.fetchall()}
-            dlq_cur = conn.execute("SELECT COUNT(*) as count FROM dead_letter WHERE recovered_at IS NULL")
+            dlq_cur = conn.execute(
+                "SELECT COUNT(*) as count FROM dead_letter WHERE recovered_at IS NULL"
+            )
             stats["dlq"] = dlq_cur.fetchone()["count"]
             return stats
 

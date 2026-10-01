@@ -71,8 +71,15 @@ def test_parse_falkor_rows_normal():
     a list of column values matching the header length.
     """
     result = [
-        ["fact", "source_entity", "target_entity", "edge_type",
-         "hop_distance", "path_nodes", "invalid_at"],
+        [
+            "fact",
+            "source_entity",
+            "target_entity",
+            "edge_type",
+            "hop_distance",
+            "path_nodes",
+            "invalid_at",
+        ],
         [
             ["f1", "a", "b", "RELATES_TO", 1, ["a", "b"], None],
             ["f2", "b", "c", "RELATES_TO", 2, ["a", "b", "c"], None],
@@ -119,10 +126,12 @@ def _engine_with_settings(**overrides):
 
 def test_validate_request_happy_defaults():
     engine, settings = _engine_with_settings()
-    req = engine.validate_request({
-        "seed_entities": ["janus-graph"],
-        "max_hops": 2,
-    })
+    req = engine.validate_request(
+        {
+            "seed_entities": ["janus-graph"],
+            "max_hops": 2,
+        }
+    )
     assert req["seeds"] == ["janus-graph"]
     assert req["max_hops"] == 2
     assert req["min_cosine"] == settings.default_min_cosine
@@ -141,10 +150,12 @@ def test_validate_request_empty_seeds():
 def test_validate_request_too_many_seeds():
     engine, _ = _engine_with_settings()
     with pytest.raises(SearchValidationError) as ei:
-        engine.validate_request({
-            "seed_entities": [f"s{i}" for i in range(6)],
-            "max_hops": 2,
-        })
+        engine.validate_request(
+            {
+                "seed_entities": [f"s{i}" for i in range(6)],
+                "max_hops": 2,
+            }
+        )
     assert ei.value.code == "INVALID_SEED"
 
 
@@ -165,18 +176,25 @@ def test_validate_request_invalid_hops_too_high():
 def test_validate_request_min_cosine_out_of_range():
     engine, _ = _engine_with_settings()
     with pytest.raises(SearchValidationError) as ei:
-        engine.validate_request({
-            "seed_entities": ["x"], "max_hops": 2,
-            "min_cosine": 1.5,
-        })
+        engine.validate_request(
+            {
+                "seed_entities": ["x"],
+                "max_hops": 2,
+                "min_cosine": 1.5,
+            }
+        )
     assert ei.value.code == "MIN_COSINE_OUT_OF_RANGE"
 
 
 def test_validate_request_limit_clamped():
     engine, settings = _engine_with_settings()
-    req = engine.validate_request({
-        "seed_entities": ["x"], "max_hops": 2, "limit": 999,
-    })
+    req = engine.validate_request(
+        {
+            "seed_entities": ["x"],
+            "max_hops": 2,
+            "limit": 999,
+        }
+    )
     assert req["limit"] == settings.max_limit
 
 
@@ -185,9 +203,14 @@ def test_validate_request_limit_clamped():
 
 def _mk_row(fact: str, cosine: float, hop: int) -> FactRow:
     return FactRow(
-        fact=fact, source_entity="a", target_entity="b",
-        edge_type="RELATES_TO", hop_distance=hop, path=["a", "b"],
-        cosine=cosine, invalid_at=None,
+        fact=fact,
+        source_entity="a",
+        target_entity="b",
+        edge_type="RELATES_TO",
+        hop_distance=hop,
+        path=["a", "b"],
+        cosine=cosine,
+        invalid_at=None,
     )
 
 
@@ -252,18 +275,28 @@ async def http_client_with_engine():
     settings = JanusSettings()
     settings.daemon.search_graph.enabled = True
     fake_engine = MagicMock(spec=SearchEngine)
-    fake_engine.validate_request = SearchEngine.validate_request.__get__(
-        fake_engine, SearchEngine
-    )
+    fake_engine.validate_request = SearchEngine.validate_request.__get__(fake_engine, SearchEngine)
     # Happy path default: return a small response.
-    fake_engine.search = AsyncMock(return_value=SearchResponse(
-        results=[FactRow(
-            fact="test-fact", source_entity="a", target_entity="b",
-            edge_type="RELATES_TO", hop_distance=1, path=["a", "b"],
-            cosine=0.9, invalid_at=None,
-        )],
-        count=1, elapsed_ms=42, degraded=False, warnings=[],
-    ))
+    fake_engine.search = AsyncMock(
+        return_value=SearchResponse(
+            results=[
+                FactRow(
+                    fact="test-fact",
+                    source_entity="a",
+                    target_entity="b",
+                    edge_type="RELATES_TO",
+                    hop_distance=1,
+                    path=["a", "b"],
+                    cosine=0.9,
+                    invalid_at=None,
+                )
+            ],
+            count=1,
+            elapsed_ms=42,
+            degraded=False,
+            warnings=[],
+        )
+    )
     ctx = DaemonContext(
         settings=settings,
         supervisor=DaemonSupervisor(
@@ -288,9 +321,7 @@ async def http_client_with_engine():
 @pytest.mark.asyncio
 async def test_http_search_graph_happy(http_client_with_engine):
     client, fake = http_client_with_engine
-    resp = await client.get(
-        "/search/graph?seed_entities=janus-graph&max_hops=2"
-    )
+    resp = await client.get("/search/graph?seed_entities=janus-graph&max_hops=2")
     assert resp.status == 200
     body = await resp.json()
     assert body["count"] == 1
@@ -312,9 +343,7 @@ async def test_http_search_graph_invalid_hops(http_client_with_engine):
     fake.search.side_effect = SearchValidationError(
         "INVALID_HOPS", "max_hops must be int in [1, 3]"
     )
-    resp = await client.get(
-        "/search/graph?seed_entities=foo&max_hops=5"
-    )
+    resp = await client.get("/search/graph?seed_entities=foo&max_hops=5")
     assert resp.status == 400
     body = await resp.json()
     assert body["code"] == "INVALID_HOPS"
@@ -327,9 +356,7 @@ async def test_http_search_graph_min_cosine_out_of_range(http_client_with_engine
     fake.search.side_effect = SearchValidationError(
         "MIN_COSINE_OUT_OF_RANGE", "min_cosine must be float in [0.0, 1.0]"
     )
-    resp = await client.get(
-        "/search/graph?seed_entities=x&max_hops=2&min_cosine=1.5"
-    )
+    resp = await client.get("/search/graph?seed_entities=x&max_hops=2&min_cosine=1.5")
     assert resp.status == 422
     body = await resp.json()
     assert body["code"] == "MIN_COSINE_OUT_OF_RANGE"
@@ -338,12 +365,8 @@ async def test_http_search_graph_min_cosine_out_of_range(http_client_with_engine
 @pytest.mark.asyncio
 async def test_http_search_graph_seed_not_found(http_client_with_engine):
     client, fake = http_client_with_engine
-    fake.search.side_effect = SearchBackendError(
-        "SEED_NOT_FOUND", "no seeds match"
-    )
-    resp = await client.get(
-        "/search/graph?seed_entities=nonexistent&max_hops=2"
-    )
+    fake.search.side_effect = SearchBackendError("SEED_NOT_FOUND", "no seeds match")
+    resp = await client.get("/search/graph?seed_entities=nonexistent&max_hops=2")
     assert resp.status == 404
     body = await resp.json()
     assert body["code"] == "SEED_NOT_FOUND"
@@ -352,12 +375,8 @@ async def test_http_search_graph_seed_not_found(http_client_with_engine):
 @pytest.mark.asyncio
 async def test_http_search_graph_traversal_timeout(http_client_with_engine):
     client, fake = http_client_with_engine
-    fake.search.side_effect = SearchBackendError(
-        "TRAVERSAL_TIMEOUT", "exceeded 2.0s"
-    )
-    resp = await client.get(
-        "/search/graph?seed_entities=x&max_hops=2"
-    )
+    fake.search.side_effect = SearchBackendError("TRAVERSAL_TIMEOUT", "exceeded 2.0s")
+    resp = await client.get("/search/graph?seed_entities=x&max_hops=2")
     assert resp.status == 504
     body = await resp.json()
     assert body["code"] == "TRAVERSAL_TIMEOUT"
@@ -366,12 +385,8 @@ async def test_http_search_graph_traversal_timeout(http_client_with_engine):
 @pytest.mark.asyncio
 async def test_http_search_graph_falkor_down(http_client_with_engine):
     client, fake = http_client_with_engine
-    fake.search.side_effect = SearchBackendError(
-        "FALKOR_DOWN", "redis connect failed"
-    )
-    resp = await client.get(
-        "/search/graph?seed_entities=x&max_hops=2"
-    )
+    fake.search.side_effect = SearchBackendError("FALKOR_DOWN", "redis connect failed")
+    resp = await client.get("/search/graph?seed_entities=x&max_hops=2")
     assert resp.status == 503
     body = await resp.json()
     assert body["code"] == "FALKOR_DOWN"
@@ -399,9 +414,7 @@ async def test_http_search_graph_disabled():
     client = TestClient(server)
     await client.start_server()
     try:
-        resp = await client.get(
-            "/search/graph?seed_entities=x&max_hops=2"
-        )
+        resp = await client.get("/search/graph?seed_entities=x&max_hops=2")
         assert resp.status == 503
         body = await resp.json()
         assert body["code"] == "DISABLED"

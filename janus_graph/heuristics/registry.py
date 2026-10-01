@@ -15,7 +15,9 @@ class HeuristicRegistry:
 
     def __init__(self, active_rules: Optional[Sequence[str]] = None):
         self._rules: Dict[str, HeuristicRule] = {}
-        self._active_rule_names: Optional[set[str]] = set(active_rules) if active_rules is not None else None
+        self._active_rule_names: Optional[set[str]] = (
+            set(active_rules) if active_rules is not None else None
+        )
         self._register_default_rules()
 
     def register(self, rule: HeuristicRule) -> None:
@@ -35,12 +37,15 @@ class HeuristicRegistry:
     def get_rules(self) -> List[HeuristicRule]:
         """Return registered rules sorted by priority."""
         rules = [
-            rule for name, rule in self._rules.items()
+            rule
+            for name, rule in self._rules.items()
             if self._active_rule_names is None or name in self._active_rule_names
         ]
         return sorted(rules, key=lambda r: r.priority)
 
-    def find_rule(self, schema_name: str, payload: Any, error: Optional[Exception] = None) -> Optional[HeuristicRule]:
+    def find_rule(
+        self, schema_name: str, payload: Any, error: Optional[Exception] = None
+    ) -> Optional[HeuristicRule]:
         """Find the first matching active rule for a schema validation failure."""
         for rule in self.get_rules():
             if rule.can_repair(schema_name, payload, error):

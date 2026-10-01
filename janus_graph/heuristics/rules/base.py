@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 class HeuristicRule(ABC):
     """Abstract repair rule for handling schema discrepancies from LLM output.
-    
+
     Adheres to the runtime_checkable RepairRule Protocol defined in core.contracts.
     """
 
@@ -40,6 +40,8 @@ class HeuristicRule(ABC):
         pass
 
     @abstractmethod
-    def repair(self, schema_name: str, payload: Any, error: Optional[Exception] = None) -> Dict[str, Any]:
+    def repair(
+        self, schema_name: str, payload: Any, error: Optional[Exception] = None
+    ) -> Dict[str, Any]:
         """Transform corrupted/incomplete payload into valid schema dictionary."""
         pass

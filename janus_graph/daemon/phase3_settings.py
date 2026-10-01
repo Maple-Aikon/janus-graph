@@ -53,13 +53,13 @@ class DaemonSearchGraphSettings(BaseModel):
     """
 
     enabled: bool = True
-    max_facts_per_query: int = 5000        # hard cap before rerank
-    traversal_timeout_sec: float = 2.0    # 504 budget
-    embedding_concurrency: int = 4        # semaphore for nomic-embed batch
-    default_min_cosine: float = 0.5       # post-filter threshold
-    default_mmr_lambda: float = 0.7       # MMR dominance (Plan section Phase 3.1)
-    default_limit: int = 10               # response default
-    max_limit: int = 50                   # hard ceiling on request limit
+    max_facts_per_query: int = 5000  # hard cap before rerank
+    traversal_timeout_sec: float = 2.0  # 504 budget
+    embedding_concurrency: int = 4  # semaphore for nomic-embed batch
+    default_min_cosine: float = 0.5  # post-filter threshold
+    default_mmr_lambda: float = 0.7  # MMR dominance (Plan section Phase 3.1)
+    default_limit: int = 10  # response default
+    max_limit: int = 50  # hard ceiling on request limit
     warn_on_hop_cap: bool = True
     # Embedding service URL (OpenAI-compatible /embeddings endpoint).
     # Defaults match config.yaml embedding.base_url.

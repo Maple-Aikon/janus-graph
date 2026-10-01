@@ -15,6 +15,7 @@ from janus_graph.heuristics.rules.node_resolutions import NodeResolutionsRule
 # Rule 1: EdgeDuplicateRule (Signatures 5 & variations)
 # ---------------------------------------------------------------------------
 
+
 def test_edge_duplicate_rule_basics():
     rule = EdgeDuplicateRule()
     assert rule.name == "edge_duplicate"
@@ -50,6 +51,7 @@ def test_edge_duplicate_key_aliases():
 # Rule 2: ExtractedEdgesRule (Signatures 1, 3)
 # ---------------------------------------------------------------------------
 
+
 def test_extracted_edges_rule():
     rule = ExtractedEdgesRule()
     assert rule.name == "extracted_edges"
@@ -72,6 +74,7 @@ def test_extracted_edges_rule():
 # ---------------------------------------------------------------------------
 # Rule 3: ExtractedEntitiesRule (Signatures 2, 4)
 # ---------------------------------------------------------------------------
+
 
 def test_extracted_entities_rule():
     rule = ExtractedEntitiesRule()
@@ -96,6 +99,7 @@ def test_extracted_entities_rule():
 # Rule 4: NodeResolutionsRule (Signature 6)
 # ---------------------------------------------------------------------------
 
+
 def test_node_resolutions_rule():
     rule = NodeResolutionsRule()
     assert rule.name == "node_resolutions"
@@ -115,6 +119,7 @@ def test_node_resolutions_rule():
 # ---------------------------------------------------------------------------
 # Registry & Logger Tests
 # ---------------------------------------------------------------------------
+
 
 def test_registry_ordering_and_filtering():
     registry = HeuristicRegistry(active_rules=["edge_duplicate", "extracted_edges"])

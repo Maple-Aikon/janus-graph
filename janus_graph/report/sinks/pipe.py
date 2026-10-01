@@ -178,13 +178,17 @@ class PipeSink(BaseSink):
             if rc != 0:
                 logger.warning(
                     "PipeSink: command=%s rc=%d stderr=%s",
-                    args, rc, (stderr or "").strip()[:200],
+                    args,
+                    rc,
+                    (stderr or "").strip()[:200],
                 )
             else:
                 logger.debug("PipeSink: OK (%s)", args[0])
         except subprocess.TimeoutExpired:
             logger.warning(
-                "PipeSink: timeout after %.1fs (%s)", self.timeout_sec, args,
+                "PipeSink: timeout after %.1fs (%s)",
+                self.timeout_sec,
+                args,
             )
         except FileNotFoundError as err:
             logger.warning("PipeSink: command not found (%s) — %s", args, err)

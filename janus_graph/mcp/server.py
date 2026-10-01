@@ -34,8 +34,16 @@ from ..engine.search_memory import search_memory as _engine_search_memory
 logger = logging.getLogger("janus_graph.mcp")
 
 BLOCKED_CYPHER_KEYWORDS = [
-    "CREATE", "DELETE", "SET", "DROP", "REMOVE",
-    "MERGE", "DETACH", "FOREACH", "CALL", "LOAD CSV"
+    "CREATE",
+    "DELETE",
+    "SET",
+    "DROP",
+    "REMOVE",
+    "MERGE",
+    "DETACH",
+    "FOREACH",
+    "CALL",
+    "LOAD CSV",
 ]
 
 
@@ -60,11 +68,13 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
         nonlocal _graphiti_instance
         if _graphiti_instance is None:
             from ..core.instance import create_graphiti_instance
+
             _graphiti_instance = create_graphiti_instance(cfg)
         return _graphiti_instance
 
     def get_falkordb_client():
         from falkordb import FalkorDB
+
         return FalkorDB(host=cfg.engine.host, port=cfg.engine.port)
 
     @mcp.tool()
@@ -187,9 +197,7 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
         Note: ``group_id`` is locked to ``cfg.graphiti.group_id`` to keep
         PicoClaw's MCP tools in a single memory tenant.
         """
-        return await _engine_search_memory(
-            cfg, query, limit, graphiti=get_graphiti()
-        )
+        return await _engine_search_memory(cfg, query, limit, graphiti=get_graphiti())
 
     @mcp.tool()
     async def get_entity(entity_name: str) -> Dict[str, Any]:
@@ -211,11 +219,13 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
             res = g.query(q, {"name": entity_name})
             rows = []
             for row in res.result_set:
-                rows.append({
-                    "name": row[0],
-                    "labels": row[1],
-                    "relationships": row[2],
-                })
+                rows.append(
+                    {
+                        "name": row[0],
+                        "labels": row[1],
+                        "relationships": row[2],
+                    }
+                )
             return {
                 "success": True,
                 "entity_name": entity_name,
@@ -336,7 +346,7 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
         log_path = Path(cfg.report.sinks.file.path)
         if not log_path.exists():
             return {"reports": [], "total": 0}
-        
+
         reports = []
         with open(log_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -350,7 +360,7 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
                     reports.append(item)
                 except json.JSONDecodeError:
                     continue
-        
+
         reports = reports[-limit:]
         return {
             "reports": reports,

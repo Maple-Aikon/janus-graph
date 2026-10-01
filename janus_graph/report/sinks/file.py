@@ -12,7 +12,9 @@ from . import BaseSink
 class FileSink(BaseSink):
     """Writes report events to a rotating JSONL file."""
 
-    def __init__(self, path: str = "./data/logs/janus_report.jsonl", rotation_max_bytes: int = 10485760):
+    def __init__(
+        self, path: str = "./data/logs/janus_report.jsonl", rotation_max_bytes: int = 10485760
+    ):
         self.path = Path(path).resolve()
         self.rotation_max_bytes = rotation_max_bytes
 

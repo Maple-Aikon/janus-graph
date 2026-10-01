@@ -214,11 +214,11 @@ class SearchEngine:
         if not isinstance(seeds, list) or not seeds:
             raise SearchValidationError("INVALID_SEED", "seed_entities must be a non-empty list")
         if not all(isinstance(s, str) and s.strip() for s in seeds):
-            raise SearchValidationError("INVALID_SEED", "seed_entities entries must be non-empty strings")
-        if len(seeds) > 5:
             raise SearchValidationError(
-                "INVALID_SEED", "seed_entities supports at most 5 entries"
+                "INVALID_SEED", "seed_entities entries must be non-empty strings"
             )
+        if len(seeds) > 5:
+            raise SearchValidationError("INVALID_SEED", "seed_entities supports at most 5 entries")
 
         max_hops = payload.get("max_hops", 2)
         # ``bool`` is a subclass of ``int`` in Python, so a JSON ``true``
@@ -229,9 +229,7 @@ class SearchEngine:
             or max_hops < 1
             or max_hops > 3
         ):
-            raise SearchValidationError(
-                "INVALID_HOPS", "max_hops must be int in [1, 3]"
-            )
+            raise SearchValidationError("INVALID_HOPS", "max_hops must be int in [1, 3]")
 
         min_cosine = payload.get("min_cosine", self._settings.default_min_cosine)
         if (
@@ -261,9 +259,7 @@ class SearchEngine:
         limit = min(limit, self._settings.max_limit)
 
         edge_types = payload.get("edge_types", []) or []
-        if not isinstance(edge_types, list) or not all(
-            isinstance(e, str) for e in edge_types
-        ):
+        if not isinstance(edge_types, list) or not all(isinstance(e, str) for e in edge_types):
             raise SearchValidationError(
                 "INVALID_EDGE_TYPES", "edge_types must be a list of strings"
             )
@@ -298,9 +294,7 @@ class SearchEngine:
         # Step 1 — seed existence probe (fast path for 404).
         existing = await self._probe_seed_existence(req["seeds"])
         if not existing:
-            raise SearchBackendError(
-                "SEED_NOT_FOUND", "no seed_entities exist in the KG"
-            )
+            raise SearchBackendError("SEED_NOT_FOUND", "no seed_entities exist in the KG")
 
         # Step 2 — Cypher BFS with timeout.
         try:
@@ -328,9 +322,7 @@ class SearchEngine:
         filtered = [
             r
             for r in fact_rows
-            if r.invalid_at is None
-            and r.cosine is not None
-            and r.cosine >= req["min_cosine"]
+            if r.invalid_at is None and r.cosine is not None and r.cosine >= req["min_cosine"]
         ]
 
         # Step 6 — MMR rerank. Falls through to cosine-only ordering if
@@ -388,12 +380,9 @@ class SearchEngine:
         a FactRow from the neighbor node's summary + the relationship type
         in the path.
         """
-        seed_literals = ", ".join(
-            f"'{_escape_cypher_string(name)}'" for name in req["seeds"]
-        )
+        seed_literals = ", ".join(f"'{_escape_cypher_string(name)}'" for name in req["seeds"])
         cypher = (
-            _CYPHER_BFS
-            .replace("{seed_literals}", seed_literals)
+            _CYPHER_BFS.replace("{seed_literals}", seed_literals)
             .replace("{max_hops}", str(req["max_hops"]))
             .replace("{cap}", str(int(self._settings.max_facts_per_query)))
         )
@@ -427,7 +416,9 @@ class SearchEngine:
                 out.append(
                     FactRow(
                         fact=first_line,
-                        source_entity=str(seed_in_path) if seed_in_path else (path_nodes[0] if path_nodes else ""),
+                        source_entity=str(seed_in_path)
+                        if seed_in_path
+                        else (path_nodes[0] if path_nodes else ""),
                         target_entity=str(target_in_path) if target_in_path else "",
                         edge_type=str(edge_type) if edge_type else "RELATES_TO",
                         hop_distance=hop_count,
@@ -439,9 +430,7 @@ class SearchEngine:
                 logger.debug("malformed bfs row %r: %s", row, e)
         return out
 
-    async def _attach_cosine(
-        self, rows: List[FactRow], query: Optional[str]
-    ) -> None:
+    async def _attach_cosine(self, rows: List[FactRow], query: Optional[str]) -> None:
         """Embed each fact via EmbeddingClient; compute cosine to query.
 
         If query is not provided, we use the first seed as the implicit
@@ -457,11 +446,11 @@ class SearchEngine:
             return
         query_vec = embeds[-1].embedding
         for idx, row in enumerate(rows):
-            row.cosine = _cosine(query_vec, embeds[idx].embedding) if embeds[idx].embedding else None
+            row.cosine = (
+                _cosine(query_vec, embeds[idx].embedding) if embeds[idx].embedding else None
+            )
 
-    def _mmr_rerank(
-        self, rows: Sequence[FactRow], lam: float, top_k: int
-    ) -> List[FactRow]:
+    def _mmr_rerank(self, rows: Sequence[FactRow], lam: float, top_k: int) -> List[FactRow]:
         """Maximal Marginal Relevance rerank.
 
         Standard MMR:
@@ -552,11 +541,7 @@ def _parse_falkor_rows(result: Any) -> List[List[Any]]:
         """Unwrap ``[type_code, value]`` compact cell. Returns value as-is
         if not a 2-element list.
         """
-        if (
-            isinstance(cell, list)
-            and len(cell) == 2
-            and isinstance(cell[0], int)
-        ):
+        if isinstance(cell, list) and len(cell) == 2 and isinstance(cell[0], int):
             return cell[1]
         return cell
 
@@ -598,8 +583,7 @@ def _classify_cypher_error(exc: Exception) -> SearchBackendError:
     if any(marker in msg for marker in parse_markers):
         return SearchBackendError(
             "INVALID_CYPHER",
-            f"generated Cypher query was rejected by FalkorDB (not an "
-            f"outage): {exc}",
+            f"generated Cypher query was rejected by FalkorDB (not an outage): {exc}",
         )
     return SearchBackendError("FALKOR_DOWN", f"cypher failed: {exc}")
 

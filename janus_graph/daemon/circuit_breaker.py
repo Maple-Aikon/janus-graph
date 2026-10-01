@@ -153,19 +153,15 @@ class FalkorCircuitBreaker:
                 self._transition_to(CircuitState.OPEN)
                 self._retry_at = time.monotonic() + self._settings.reset_timeout_sec
                 logger.warning(
-                    "circuit_breaker: HALF_OPEN → OPEN "
-                    "(probe failed, retry_at=+%.0fs)",
+                    "circuit_breaker: HALF_OPEN → OPEN (probe failed, retry_at=+%.0fs)",
                     self._settings.reset_timeout_sec,
                 )
             elif self._state is CircuitState.CLOSED:
                 if self._failure_count >= self._settings.failure_threshold:
                     self._transition_to(CircuitState.OPEN)
-                    self._retry_at = (
-                        time.monotonic() + self._settings.reset_timeout_sec
-                    )
+                    self._retry_at = time.monotonic() + self._settings.reset_timeout_sec
                     logger.warning(
-                        "circuit_breaker: CLOSED → OPEN "
-                        "(failure_count=%d ≥ threshold=%d)",
+                        "circuit_breaker: CLOSED → OPEN (failure_count=%d ≥ threshold=%d)",
                         self._failure_count,
                         self._settings.failure_threshold,
                     )
@@ -267,8 +263,7 @@ class FalkorCircuitBreaker:
                     asyncio.create_task(_invoke_async_callback(cb, snap))
             except Exception:
                 logger.exception(
-                    "circuit_breaker: sync on_open callback raised; "
-                    "blocking restart attempt"
+                    "circuit_breaker: sync on_open callback raised; blocking restart attempt"
                 )
 
 
@@ -280,10 +275,7 @@ async def _invoke_async_callback(cb, snap):
     try:
         await cb(snap, _NULL_MANAGER_SENTINEL)
     except Exception:
-        logger.exception(
-            "circuit_breaker: async on_open callback raised; "
-            "blocking restart attempt"
-        )
+        logger.exception("circuit_breaker: async on_open callback raised; blocking restart attempt")
 
 
 # ─── module test helper ─────────────────────────────────────────────────

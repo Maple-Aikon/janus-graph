@@ -127,12 +127,15 @@ async def test_probe_strict_dead_on_redislite_zombie(supervisor):
     def fake_module(host, port, timeout):
         return False  # but no falkordb module loaded
 
-    with patch(
-        "janus_graph.daemon.falkordb_supervisor._redis_ping",
-        side_effect=fake_ping,
-    ), patch(
-        "janus_graph.daemon.falkordb_supervisor._module_list",
-        side_effect=fake_module,
+    with (
+        patch(
+            "janus_graph.daemon.falkordb_supervisor._redis_ping",
+            side_effect=fake_ping,
+        ),
+        patch(
+            "janus_graph.daemon.falkordb_supervisor._module_list",
+            side_effect=fake_module,
+        ),
     ):
         result = await supervisor.probe_strict()
     assert result is ProbeState.DEAD
@@ -151,12 +154,15 @@ async def test_probe_strict_alive_when_falkordb_module_loaded(supervisor):
     def fake_module(host, port, timeout):
         return True
 
-    with patch(
-        "janus_graph.daemon.falkordb_supervisor._redis_ping",
-        side_effect=fake_ping,
-    ), patch(
-        "janus_graph.daemon.falkordb_supervisor._module_list",
-        side_effect=fake_module,
+    with (
+        patch(
+            "janus_graph.daemon.falkordb_supervisor._redis_ping",
+            side_effect=fake_ping,
+        ),
+        patch(
+            "janus_graph.daemon.falkordb_supervisor._module_list",
+            side_effect=fake_module,
+        ),
     ):
         result = await supervisor.probe_strict()
     assert result is ProbeState.ALIVE
@@ -180,12 +186,15 @@ async def test_probe_strict_short_circuits_on_ping_dead(supervisor):
         module_called = True
         return False
 
-    with patch(
-        "janus_graph.daemon.falkordb_supervisor._redis_ping",
-        side_effect=fake_ping,
-    ), patch(
-        "janus_graph.daemon.falkordb_supervisor._module_list",
-        side_effect=fake_module,
+    with (
+        patch(
+            "janus_graph.daemon.falkordb_supervisor._redis_ping",
+            side_effect=fake_ping,
+        ),
+        patch(
+            "janus_graph.daemon.falkordb_supervisor._module_list",
+            side_effect=fake_module,
+        ),
     ):
         result = await supervisor.probe_strict()
     assert result is ProbeState.DEAD
@@ -209,12 +218,15 @@ async def test_probe_strict_warming_up_preserved(supervisor):
         module_called = True
         return False
 
-    with patch(
-        "janus_graph.daemon.falkordb_supervisor._redis_ping",
-        side_effect=fake_ping,
-    ), patch(
-        "janus_graph.daemon.falkordb_supervisor._module_list",
-        side_effect=fake_module,
+    with (
+        patch(
+            "janus_graph.daemon.falkordb_supervisor._redis_ping",
+            side_effect=fake_ping,
+        ),
+        patch(
+            "janus_graph.daemon.falkordb_supervisor._module_list",
+            side_effect=fake_module,
+        ),
     ):
         result = await supervisor.probe_strict()
     assert result is ProbeState.WARMING_UP
