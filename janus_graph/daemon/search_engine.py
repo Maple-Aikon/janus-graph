@@ -221,26 +221,42 @@ class SearchEngine:
             )
 
         max_hops = payload.get("max_hops", 2)
-        if not isinstance(max_hops, int) or max_hops < 1 or max_hops > 3:
+        # ``bool`` is a subclass of ``int`` in Python, so a JSON ``true``
+        # would otherwise slip through as hops=1. Reject it explicitly.
+        if (
+            not isinstance(max_hops, int)
+            or isinstance(max_hops, bool)
+            or max_hops < 1
+            or max_hops > 3
+        ):
             raise SearchValidationError(
                 "INVALID_HOPS", "max_hops must be int in [1, 3]"
             )
 
         min_cosine = payload.get("min_cosine", self._settings.default_min_cosine)
-        if not isinstance(min_cosine, (int, float)) or not (0.0 <= min_cosine <= 1.0):
+        if (
+            not isinstance(min_cosine, (int, float))
+            or isinstance(min_cosine, bool)
+            or not (0.0 <= min_cosine <= 1.0)
+        ):
             raise SearchValidationError(
                 "MIN_COSINE_OUT_OF_RANGE", "min_cosine must be a float in [0.0, 1.0]"
             )
 
         mmr_lambda = payload.get("mmr_lambda", self._settings.default_mmr_lambda)
-        if not isinstance(mmr_lambda, (int, float)) or not (0.0 <= mmr_lambda <= 1.0):
+        if (
+            not isinstance(mmr_lambda, (int, float))
+            or isinstance(mmr_lambda, bool)
+            or not (0.0 <= mmr_lambda <= 1.0)
+        ):
             # Treat out-of-range MMR lambda as default (search degrades but
             # still produces results) — Plan §Phase 3.1 doesn't list this as
-            # an HTTP error case.
+            # an HTTP error case. A bool is rejected the same way: silently
+            # coercing ``true`` to 1.0 would disable MMR diversity entirely.
             mmr_lambda = self._settings.default_mmr_lambda
 
         limit = payload.get("limit", self._settings.default_limit)
-        if not isinstance(limit, int) or limit < 1:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise SearchValidationError("INVALID_LIMIT", "limit must be a positive int")
         limit = min(limit, self._settings.max_limit)
 
@@ -365,8 +381,7 @@ class SearchEngine:
         in the path.
         """
         seed_literals = ", ".join(
-            f"'{name.replace(chr(39), chr(39) + chr(39))}'"
-            for name in req["seeds"]
+            f"'{_escape_cypher_string(name)}'" for name in req["seeds"]
         )
         cypher = (
             _CYPHER_BFS
@@ -383,7 +398,7 @@ class SearchEngine:
                 "--compact",
             )
         except Exception as e:
-            raise SearchBackendError("FALKOR_DOWN", f"cypher failed: {e}")
+            raise _classify_cypher_error(e)
 
         rows = _parse_falkor_rows(result)
         out: List[FactRow] = []
@@ -546,13 +561,78 @@ def _parse_falkor_rows(result: Any) -> List[List[Any]]:
     return out
 
 
+def _classify_cypher_error(exc: Exception) -> SearchBackendError:
+    r"""Decide whether a Cypher failure is a client-input error or a dead engine.
+
+    A query built from *our own* validated input should never be a syntax
+    error. When one happens it means the generated text is malformed — a
+    server-side defect, not a FalkorDB outage. Reporting it as FALKOR_DOWN
+    (503) is actively harmful: it tells monitoring the database is down and
+    can trip the daemon's circuit-breaker / restart policy over a bug that
+    has nothing to do with connectivity.
+
+    So: a syntax/parse complaint becomes INVALID_CYPHER (400, client-visible,
+    no circuit-breaker impact); genuine connection/transport failures stay
+    FALKOR_DOWN (503).
+
+    Split is conservative — anything that does not clearly look like a query
+    parse problem is still treated as the backend being down, so a real
+    outage is never masked by this change.
+    """
+    msg = str(exc).lower()
+    parse_markers = (
+        "invalid input",
+        "syntax error",
+        "errormessage",
+        "expected",
+        "parse",
+    )
+    if any(marker in msg for marker in parse_markers):
+        return SearchBackendError(
+            "INVALID_CYPHER",
+            f"generated Cypher query was rejected by FalkorDB (not an "
+            f"outage): {exc}",
+        )
+    return SearchBackendError("FALKOR_DOWN", f"cypher failed: {exc}")
+
+
+def _escape_cypher_string(value: str) -> str:
+    r"""Escape a Python string for a single-quoted Cypher string literal.
+
+    FalkorDB (v8.9.x, verified 2026-10-01 against graphiti_memory) uses
+    **backslash** escaping inside ``'...'`` — NOT the SQL-style quote-doubling
+    (``''``) that openCypher/Neo4j docs imply. Escape the backslash FIRST,
+    then the single quote, otherwise a value ending in a backslash would
+    swallow the closing quote.
+
+    Measured round-trip over 12 payloads (live :6379, ``RETURN <literal>``):
+      backslash-first -> 12/12 exact, 0 corrupted, 0 errors
+      quote-doubling  ->  5 exact,  2 corrupted, 5 parse errors
+
+    Quote-doubling fails two ways, both verified:
+      1. PARSE ERROR — ``'O'Brien'`` makes the lexer see ``'O'`` followed by
+         a bare identifier, so the whole query is rejected.
+      2. SILENT CORRUPTION — ``'a\\b'`` is read as escape sequence ``\\b``
+         and returns ``'a\x08'`` (backspace). No error, wrong data.
+
+    Backslash-first round-trips quotes, backslashes, tabs, newlines,
+    semicolons and braces exactly.
+
+    Parameter binding (``... PARAMS n k v``) is NOT available as an
+    alternative here — this FalkorDB rejects it with
+    ``Invalid input 'P'``. Literal escaping is the only option.
+    """
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
 def _cypher_param(value: Any) -> str:
-    """Format a Python value as a FalkorDB CYPHER param literal.
+    """Format a Python value as a FalkorDB CYPHER header literal.
 
     Mirrors falkordb's stringify_param_value: strings get single-quoted
-    with internal single-quotes escaped (``''``); numbers / bools /
-    None get their repr; lists/objects NOT supported here (v1 always
-    inlines literal lists directly in the query).
+    with backslash escaping (see ``_escape_cypher_string`` — this engine
+    does NOT accept SQL-style ``''`` doubling); numbers / bools / None get
+    their repr; lists/objects NOT supported here (v1 always inlines literal
+    lists directly in the query).
     """
     if value is None:
         return "NULL"
@@ -561,7 +641,7 @@ def _cypher_param(value: Any) -> str:
     if isinstance(value, (int, float)):
         return repr(value)
     if isinstance(value, str):
-        escaped = value.replace("'", "''")
+        escaped = _escape_cypher_string(value)
         return f"'{escaped}'"
     # Fallback: string repr with quotes (best-effort).
     return f"'{value!s}'"

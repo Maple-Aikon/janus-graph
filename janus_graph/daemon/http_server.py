@@ -393,6 +393,11 @@ async def search_graph_handler(request: web.Request) -> web.Response:
             return web.json_response({"code": e.code, "message": e.message}, status=404)
         if e.code == "TRAVERSAL_TIMEOUT":
             return web.json_response({"code": e.code, "message": e.message}, status=504)
+        if e.code == "INVALID_CYPHER":
+            # The engine is UP; we generated a query it rejected. 400, not
+            # 503 — must not read as "database down" to monitoring or trip
+            # the circuit breaker.
+            return web.json_response({"code": e.code, "message": e.message}, status=400)
         # FALKOR_DOWN + default → 503
         return web.json_response({"code": e.code, "message": e.message}, status=503)
     except Exception as e:  # pragma: no cover — defensive
