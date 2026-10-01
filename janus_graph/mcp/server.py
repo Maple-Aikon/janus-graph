@@ -213,8 +213,8 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
             fdb = get_falkordb_client()
             g = fdb.select_graph(target_group)
             q = """
-            MATCH (e:Entity) 
-            WHERE toLower(e.name) CONTAINS toLower($name) 
+            MATCH (e:Entity)
+            WHERE toLower(e.name) CONTAINS toLower($name)
             OPTIONAL MATCH (e)-[r]-(other:Entity)
             RETURN e.name, labels(e), collect(DISTINCT {rel: type(r), other: other.name}) LIMIT 50
             """

@@ -198,7 +198,7 @@ class EpisodeQueue:
                 conn.execute(
                     """
                     INSERT INTO episodes (
-                        id, status, payload_json, enqueued_at, attempt_count, 
+                        id, status, payload_json, enqueued_at, attempt_count,
                         consecutive_failures, created_at, updated_at
                     ) VALUES (?, 'queued', ?, ?, 0, 0, ?, ?)
                     """,
