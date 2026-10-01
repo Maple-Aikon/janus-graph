@@ -56,7 +56,6 @@ import pytest
 from janus_graph.config import JanusSettings
 from janus_graph.engine.search_memory import search_memory
 
-
 # ---------------------------------------------------------------------------
 # Test A — graphiti-core version pin drift-check
 # ---------------------------------------------------------------------------

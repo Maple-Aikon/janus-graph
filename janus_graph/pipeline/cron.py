@@ -9,6 +9,7 @@ import signal
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
+
 from ..config import JanusSettings, load_config
 from ..core.contracts import Settings
 from ..report.dispatcher import ReportDispatcher

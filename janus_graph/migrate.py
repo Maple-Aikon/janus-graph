@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from pathlib import Path
 import platform
 import shutil
 import sqlite3
+from pathlib import Path
 from typing import Any, Dict, Optional
+
 import yaml
 
 logger = logging.getLogger("janus_graph.migrate")

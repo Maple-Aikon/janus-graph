@@ -27,16 +27,15 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from janus_graph.config import JanusSettings
 from janus_graph.daemon.episode_queue_adapter import (
-    EpisodeQueueAdapter,
     EpisodeDuplicateError,
+    EpisodeQueueAdapter,
     LockModeError,
     _payload_hash,
 )
-from janus_graph.daemon.http_server import build_app
+from janus_graph.daemon.falkordb_supervisor import DaemonSupervisor
+from janus_graph.daemon.http_server import __version__, build_app
 from janus_graph.daemon.lifespan import DaemonContext
 from janus_graph.pipeline.queue import EpisodeQueue
-from janus_graph.daemon.falkordb_supervisor import DaemonSupervisor
-from janus_graph.daemon.http_server import __version__
 
 
 @pytest.fixture

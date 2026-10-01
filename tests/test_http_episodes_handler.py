@@ -38,7 +38,6 @@ from janus_graph.daemon.episode_queue_adapter import (
 from janus_graph.daemon.http_server import __version__, episodes_handler
 from janus_graph.daemon.lifespan import DaemonContext
 
-
 # ─── Fixtures ───────────────────────────────────────────────────────────
 
 

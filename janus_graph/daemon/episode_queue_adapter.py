@@ -219,7 +219,6 @@ class EpisodeQueueAdapter:
         """
         import json as _json
         import uuid as _uuid
-
         from datetime import datetime, timezone
 
         ep_id = str(_uuid.uuid4())

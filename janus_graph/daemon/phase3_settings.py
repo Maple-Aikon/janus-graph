@@ -19,7 +19,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 LockMode = Literal["mcp_only", "daemon_only", "dual_with_lock"]
 
 

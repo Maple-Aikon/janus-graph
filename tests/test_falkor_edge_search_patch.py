@@ -194,8 +194,8 @@ def test_falkordb_proc_takes_exactly_two_args():
     This is WHY the patch only removes labels. If a future FalkorDB grows
     a limit arg, this test is the reminder to revisit graph_queries.py:167.
     """
-    from graphiti_core.graph_queries import get_relationships_query
     from graphiti_core.driver.driver import GraphProvider
+    from graphiti_core.graph_queries import get_relationships_query
 
     cypher = get_relationships_query(
         "edge_name_and_fact", limit=10, provider=GraphProvider.FALKORDB
@@ -208,8 +208,8 @@ def test_falkordriver_never_sets_search_interface():
     """Pin the reason site 1 is live: the guard at search_utils.py:193 is
     always false for FalkorDB. If a future driver sets search_interface,
     this test tells us to re-check which site matters."""
-    from graphiti_core.driver.falkordb_driver import FalkorDriver
     from graphiti_core.driver.driver import GraphProvider
+    from graphiti_core.driver.falkordb_driver import FalkorDriver
 
     driver = FalkorDriver.__new__(FalkorDriver)
     driver._search_ops = None

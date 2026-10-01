@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 from typing import Any, Iterable, List, Optional
+
 from graphiti_core.embedder.client import EmbedderClient
+
 from .lru import LRUCacheBackend
 from .stats import CacheStats
 

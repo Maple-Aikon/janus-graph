@@ -35,7 +35,6 @@ from janus_graph.daemon.search_engine import (
     SearchValidationError,
 )
 
-
 # ─── Fixtures ───────────────────────────────────────────────────────────
 
 

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import hashlib
+import hmac
 import json
 import logging
 import os
-from typing import Optional
 import urllib.request
+from typing import Optional
+
 from ..models import ReportEvent
 from . import BaseSink
 

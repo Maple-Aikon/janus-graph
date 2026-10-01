@@ -41,7 +41,6 @@ from janus_graph.daemon.falkordb_supervisor import (
 )
 from janus_graph.engine.server import FalkorDBServerManager
 
-
 # --- Fixtures ---------------------------------------------------------------
 
 

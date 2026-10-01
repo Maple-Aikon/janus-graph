@@ -1,18 +1,19 @@
 """Tests for Pipeline Worker, Cron Sweeper, and Dream Mode Consolidation."""
 
 import asyncio
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from pathlib import Path
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
+
 import pytest
 
-from janus_graph.pipeline.queue import EpisodeQueue, EpisodeRecord
-from janus_graph.pipeline.worker import EpisodeWorker
+from janus_graph.core.contracts import PipelineSettings, ReportSettings, Settings
 from janus_graph.pipeline.cron import run_cron_sweep
 from janus_graph.pipeline.dream import (
     bounded_label_propagation,
     run_dream_consolidation,
 )
-from janus_graph.core.contracts import Settings, PipelineSettings, ReportSettings
+from janus_graph.pipeline.queue import EpisodeQueue, EpisodeRecord
+from janus_graph.pipeline.worker import EpisodeWorker
 
 
 @pytest.mark.asyncio

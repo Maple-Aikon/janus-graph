@@ -1,8 +1,9 @@
 """Baseline scaffolding and configuration tests."""
 
 from pathlib import Path
+
 from janus_graph import __version__
-from janus_graph.config import load_config, JanusSettings
+from janus_graph.config import JanusSettings, load_config
 
 
 def test_version():
@@ -27,10 +28,11 @@ def test_config_env_override(monkeypatch):
 
 
 def test_create_graphiti_instance_structure():
-    from janus_graph.core.instance import create_graphiti_instance
     from graphiti_core import Graphiti
-    from janus_graph.heuristics.repairing_client import SchemaRepairingLLMClient
+
     from janus_graph.cache.embed_cache import EmbedCache
+    from janus_graph.core.instance import create_graphiti_instance
+    from janus_graph.heuristics.repairing_client import SchemaRepairingLLMClient
 
     cfg = load_config()
     inst = create_graphiti_instance(cfg)

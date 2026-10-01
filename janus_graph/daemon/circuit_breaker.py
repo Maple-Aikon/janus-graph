@@ -22,7 +22,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
 
 from ..config import FalkorCircuitSettings
 

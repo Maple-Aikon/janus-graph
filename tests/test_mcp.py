@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from janus_graph.config import JanusSettings
 from janus_graph.mcp.server import create_mcp_server, is_read_only_cypher

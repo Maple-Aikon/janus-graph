@@ -3,21 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 import json
 import logging
 import os
-from pathlib import Path
 import re
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-from mcp.server.mcpserver import MCPServer
-
-from ..config import JanusSettings, load_config
-from ..pipeline.queue import EpisodeQueue
-from ..pipeline.dream import run_dream_consolidation
-from ..cache.embed_cache import EmbedCache
 
 # graphiti-core: import SearchConfig recipe + SearchFilters/DateFilter for
 # the MCP `search_memory` tool (v0.4.5: parity with hook Falkor path).
@@ -27,9 +20,18 @@ from ..cache.embed_cache import EmbedCache
 # This module is now a thin adaptor that delegates to the engine facade so
 # stdio MCP and the daemon HTTP endpoint (PR 2) share a single SoT.
 from graphiti_core.search.search_config_recipes import EDGE_HYBRID_SEARCH_MMR  # noqa: F401
-from graphiti_core.search.search_filters import ComparisonOperator, DateFilter, SearchFilters  # noqa: F401
+from graphiti_core.search.search_filters import (  # noqa: F401
+    ComparisonOperator,
+    DateFilter,
+    SearchFilters,
+)
+from mcp.server.mcpserver import MCPServer
 
+from ..cache.embed_cache import EmbedCache
+from ..config import JanusSettings, load_config
 from ..engine.search_memory import search_memory as _engine_search_memory
+from ..pipeline.dream import run_dream_consolidation
+from ..pipeline.queue import EpisodeQueue
 
 logger = logging.getLogger("janus_graph.mcp")
 

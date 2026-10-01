@@ -1,9 +1,11 @@
 """Tests for LRU cache backend and EmbedCache."""
 
-import pytest
 from unittest.mock import AsyncMock
-from janus_graph.cache.lru import LRUCacheBackend
+
+import pytest
+
 from janus_graph.cache.embed_cache import EmbedCache
+from janus_graph.cache.lru import LRUCacheBackend
 
 
 def test_lru_cache_eviction():

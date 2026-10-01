@@ -26,7 +26,6 @@ import pytest
 from janus_graph.config import JanusSettings
 from janus_graph.daemon.cron_loop import CronLoop, _state_str
 
-
 # ─── fixtures ────────────────────────────────────────────────────────────
 
 

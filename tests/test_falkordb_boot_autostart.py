@@ -23,7 +23,6 @@ from janus_graph.daemon.falkordb_supervisor import (
     _module_list,
 )
 
-
 # --- Fixtures ---------------------------------------------------------------
 
 

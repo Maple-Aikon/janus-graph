@@ -1,26 +1,28 @@
 """Tests for Phase 0.5 interface contract freeze."""
 
-import pytest
 from dataclasses import FrozenInstanceError, is_dataclass
 from pathlib import Path
+
+import pytest
+
 from janus_graph.core.contracts import (
-    Settings,
+    CliReportSettings,
+    DatabaseSettings,
+    DreamEvent,
+    DreamSettings,
+    EmbeddingSettings,
+    LLMSettings,
+    PathsSettings,
     PipelineSettings,
     QueueSettings,
-    DreamSettings,
+    QuirksLogger,
+    RepairEvent,
+    RepairRule,
     ReportSettings,
-    CliReportSettings,
+    ReportSink,
+    Settings,
     TelegramReportSettings,
     WebhookReportSettings,
-    LLMSettings,
-    EmbeddingSettings,
-    DatabaseSettings,
-    PathsSettings,
-    RepairEvent,
-    DreamEvent,
-    QuirksLogger,
-    RepairRule,
-    ReportSink,
 )
 from janus_graph.heuristics.quirks_logger import QuirksLogger as ImplQuirksLogger
 from janus_graph.heuristics.rules.base import HeuristicRule

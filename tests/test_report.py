@@ -3,21 +3,23 @@
 import io
 import json
 from unittest.mock import MagicMock, patch
+
 import pytest
-from janus_graph.report.models import ReportEvent, ReportSeverity
-from janus_graph.report.dispatcher import ReportDispatcher
-from janus_graph.report.sinks.file import FileSink
-from janus_graph.report.sinks.cli import CLISink
-from janus_graph.report.sinks.telegram import TelegramSink
-from janus_graph.report.sinks.pipe import PipeSink
-from janus_graph.report.sinks.webhook import WebhookSink
+
 from janus_graph.core.contracts import (
-    Settings,
-    ReportSettings,
     CliReportSettings,
+    ReportSettings,
+    Settings,
     TelegramReportSettings,
     WebhookReportSettings,
 )
+from janus_graph.report.dispatcher import ReportDispatcher
+from janus_graph.report.models import ReportEvent, ReportSeverity
+from janus_graph.report.sinks.cli import CLISink
+from janus_graph.report.sinks.file import FileSink
+from janus_graph.report.sinks.pipe import PipeSink
+from janus_graph.report.sinks.telegram import TelegramSink
+from janus_graph.report.sinks.webhook import WebhookSink
 
 
 @pytest.mark.asyncio
@@ -338,7 +340,7 @@ async def test_pipe_sink_timeout_does_not_crash(tmp_path, caplog):
 @pytest.mark.asyncio
 async def test_pipe_sink_in_dispatcher_with_pydantic_settings(temp_dir):
     """PipeSink must register via ReportDispatcher.from_settings(JanusSettings)."""
-    from janus_graph.config import JanusSettings, ReportConfig, ReportSinksConfig, PipeSinkConfig
+    from janus_graph.config import JanusSettings, PipeSinkConfig, ReportConfig, ReportSinksConfig
 
     settings = JanusSettings(
         report=ReportConfig(
@@ -365,7 +367,7 @@ async def test_pipe_sink_in_dispatcher_with_pydantic_settings(temp_dir):
 @pytest.mark.asyncio
 async def test_pipe_sink_dispatcher_skips_when_command_empty(temp_dir):
     """If `pipe.enabled=true` but `command` is empty, dispatcher must skip."""
-    from janus_graph.config import JanusSettings, ReportConfig, ReportSinksConfig, PipeSinkConfig
+    from janus_graph.config import JanusSettings, PipeSinkConfig, ReportConfig, ReportSinksConfig
 
     settings = JanusSettings(
         report=ReportConfig(

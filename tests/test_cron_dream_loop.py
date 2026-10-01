@@ -30,14 +30,14 @@ no sleeping on real wall-clock time, no network, no production code changes.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime as _RealDatetime, timedelta, timezone
+from datetime import datetime as _RealDatetime
+from datetime import timedelta, timezone
 from typing import Any, Dict
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from janus_graph.daemon.cron_loop import CronLoop
-
 
 # ─── fake clock ──────────────────────────────────────────────────────────
 

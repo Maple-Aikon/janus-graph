@@ -1,15 +1,16 @@
 """Tests for heuristics rules and quirks logger."""
 
 import json
-import pytest
 from pathlib import Path
+
+import pytest
+
 from janus_graph.heuristics.quirks_logger import QuirksLogger
 from janus_graph.heuristics.registry import HeuristicRegistry
 from janus_graph.heuristics.rules.edge_duplicate import EdgeDuplicateRule
 from janus_graph.heuristics.rules.extracted_edges import ExtractedEdgesRule
 from janus_graph.heuristics.rules.extracted_entities import ExtractedEntitiesRule
 from janus_graph.heuristics.rules.node_resolutions import NodeResolutionsRule
-
 
 # ---------------------------------------------------------------------------
 # Rule 1: EdgeDuplicateRule (Signatures 5 & variations)

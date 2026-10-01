@@ -43,7 +43,7 @@ from ..config import (
     FalkorRestartPolicySettings,
 )
 from ..engine.server import FalkorDBServerManager
-from .circuit_breaker import FalkorCircuitBreaker, CircuitSnapshot
+from .circuit_breaker import CircuitSnapshot, FalkorCircuitBreaker
 from .falkordb_restart_policy import FalkorRestartPolicy
 
 logger = logging.getLogger("janus_graph.daemon.falkordb_supervisor")

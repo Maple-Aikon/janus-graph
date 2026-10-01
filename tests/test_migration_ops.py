@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from janus_graph.migrate import snapshot_database, rollback_database
+from janus_graph.migrate import rollback_database, snapshot_database
 
 
 def _create_test_db(path: Path, num_records: int = 10) -> None:

@@ -27,6 +27,10 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from janus_graph.config import JanusSettings
 from janus_graph.daemon.embedding_client import EmbeddingResult
+from janus_graph.daemon.falkordb_supervisor import DaemonSupervisor
+from janus_graph.daemon.http_server import __version__, build_app
+from janus_graph.daemon.lifespan import DaemonContext
+from janus_graph.daemon.phase3_settings import DaemonSearchGraphSettings
 from janus_graph.daemon.search_engine import (
     FactRow,
     SearchBackendError,
@@ -36,11 +40,6 @@ from janus_graph.daemon.search_engine import (
     _cosine,
     _parse_falkor_rows,
 )
-from janus_graph.daemon.http_server import build_app, __version__
-from janus_graph.daemon.lifespan import DaemonContext
-from janus_graph.daemon.falkordb_supervisor import DaemonSupervisor
-from janus_graph.daemon.phase3_settings import DaemonSearchGraphSettings
-
 
 # ─── pure-helper unit tests ───────────────────────────────────────────
 

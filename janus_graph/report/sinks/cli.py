@@ -6,6 +6,7 @@ import json
 import re
 import sys
 from typing import Optional
+
 from ..models import ReportEvent
 from . import BaseSink
 

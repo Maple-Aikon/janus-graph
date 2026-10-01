@@ -37,13 +37,12 @@ from aiohttp.test_utils import make_mocked_request
 
 from janus_graph.config import JanusSettings
 from janus_graph.daemon.http_search_memory_handler import (
-    _RATE_LIMITER,
     _RATE_LIMIT_REQUESTS,
     _RATE_LIMIT_WINDOW_SEC,
+    _RATE_LIMITER,
     search_memory_handler,
 )
 from janus_graph.daemon.lifespan import DaemonContext
-
 
 # ─── Fixtures ───────────────────────────────────────────────────────────
 
@@ -420,6 +419,7 @@ async def test_no_speculative_cancellation_code_added(
     or ``asyncio.shield`` is wrapped around the engine call.
     """
     import inspect
+
     from janus_graph.daemon import http_search_memory_handler as mod
 
     src = inspect.getsource(mod)

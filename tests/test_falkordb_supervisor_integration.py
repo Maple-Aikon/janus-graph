@@ -35,7 +35,6 @@ from janus_graph.daemon.falkordb_restart_policy import (
 from janus_graph.daemon.falkordb_supervisor import DaemonSupervisor
 from janus_graph.engine.server import FalkorDBServerManager
 
-
 # --- Fixtures ---------------------------------------------------------------
 
 

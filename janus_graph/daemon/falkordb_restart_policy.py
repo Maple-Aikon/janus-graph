@@ -37,10 +37,10 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Deque, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Deque, Optional
 
 from ..config import FalkorRestartPolicySettings
-from .circuit_breaker import CircuitSnapshot, _NULL_MANAGER_SENTINEL
+from .circuit_breaker import _NULL_MANAGER_SENTINEL, CircuitSnapshot
 
 if TYPE_CHECKING:  # pragma: no cover
     from ..engine.server import FalkorDBServerManager

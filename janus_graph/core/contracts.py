@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
-
 # ---------------------------------------------------------------------------
 # Settings dataclasses (frozen snapshots)
 # ---------------------------------------------------------------------------

@@ -34,10 +34,10 @@ evidence that motivated this fix is recorded in the docstring of
 import pytest
 
 from janus_graph.daemon.search_engine import (
+    SearchValidationError,
+    _classify_cypher_error,
     _cypher_param,
     _escape_cypher_string,
-    _classify_cypher_error,
-    SearchValidationError,
 )
 
 Q = chr(39)

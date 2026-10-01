@@ -1,9 +1,9 @@
 """Pipeline package for asynchronous resilient episode queues, workers, and dream consolidation."""
 
-from .queue import EpisodeQueue, EpisodeRecord
-from .worker import EpisodeWorker
 from .cron import run_cron_sweep
 from .dream import run_dream_consolidation
+from .queue import EpisodeQueue, EpisodeRecord
+from .worker import EpisodeWorker
 
 __all__ = [
     "EpisodeQueue",

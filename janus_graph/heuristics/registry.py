@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
+
 from .rules.base import HeuristicRule
 from .rules.edge_duplicate import EdgeDuplicateRule
 from .rules.extracted_edges import ExtractedEdgesRule

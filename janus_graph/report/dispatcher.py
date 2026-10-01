@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import List, Optional, Union
+
 from ..config import JanusSettings, load_config
 from ..core.contracts import Settings
 from .models import ReportEvent, ReportSeverity
