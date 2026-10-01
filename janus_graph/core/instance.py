@@ -12,11 +12,9 @@ def create_graphiti_instance(settings: Optional[JanusSettings] = None) -> Any:
     from graphiti_core import Graphiti
     from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
     from graphiti_core.driver.falkordb_driver import FalkorDriver
-    from graphiti_core.edges import EntityEdge
     from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
     from graphiti_core.llm_client.config import LLMConfig as _CoreLLMConfig
     from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
-    from graphiti_core.nodes import EntityNode
 
     from ..cache.embed_cache import EmbedCache
     from ..heuristics.repairing_client import SchemaRepairingLLMClient

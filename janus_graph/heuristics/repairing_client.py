@@ -20,7 +20,7 @@ Compatibility shim for graphiti_core >=0.20:
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 from graphiti_core.llm_client import LLMClient
 from graphiti_core.llm_client.config import DEFAULT_MAX_TOKENS, ModelSize

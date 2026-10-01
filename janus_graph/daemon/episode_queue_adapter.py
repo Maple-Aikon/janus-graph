@@ -25,15 +25,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 import os
 import sqlite3
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..pipeline.queue import EpisodeQueue, EpisodeRecord
+from ..pipeline.queue import EpisodeQueue
 from .phase3_settings import DaemonLockSettings
 
 logger = logging.getLogger("janus_graph.daemon.episode_queue_adapter")

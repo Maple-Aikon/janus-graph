@@ -41,7 +41,7 @@ import asyncio
 import logging
 import time
 from collections import defaultdict, deque
-from typing import TYPE_CHECKING, Any, Deque, Dict
+from typing import TYPE_CHECKING, Deque, Dict
 
 from aiohttp import web
 

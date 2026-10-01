@@ -20,16 +20,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
+from typing import Any, Awaitable, Callable, Optional, Union
 
 from ..config import FalkorCircuitSettings
-
-if TYPE_CHECKING:  # pragma: no cover
-    # Imported only for type checkers; runtime keeps FalkorDBServerManager
-    # decoupled to avoid an import cycle (circuit_breaker → falkordb_supervisor).
-    from ..engine.server import FalkorDBServerManager
 
 logger = logging.getLogger("janus_graph.daemon.circuit_breaker")
 

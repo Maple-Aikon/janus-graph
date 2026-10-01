@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
-import subprocess
+import subprocess  # noqa: F401  -- re-exported for tests that patch server_mod.subprocess
 import time
 from pathlib import Path
 from typing import Optional

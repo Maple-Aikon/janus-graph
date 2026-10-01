@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import os
 import re
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 # graphiti-core: import SearchConfig recipe + SearchFilters/DateFilter for
 # the MCP `search_memory` tool (v0.4.5: parity with hook Falkor path).
@@ -27,7 +24,6 @@ from graphiti_core.search.search_filters import (  # noqa: F401
 )
 from mcp.server.mcpserver import MCPServer
 
-from ..cache.embed_cache import EmbedCache
 from ..config import JanusSettings, load_config
 from ..engine.search_memory import search_memory as _engine_search_memory
 from ..pipeline.dream import run_dream_consolidation

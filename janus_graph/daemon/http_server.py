@@ -46,7 +46,6 @@ from typing import TYPE_CHECKING, Any, Dict
 
 from aiohttp import web
 
-from ..config import HTTPSettings
 from .circuit_breaker import CircuitState  # noqa: F401  (re-exported for tests)
 from .episode_queue_adapter import (
     EpisodeDuplicateError,

@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-import sqlite3
 import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Union
 
 from ..config import JanusSettings, load_config
-from ..core.contracts import DreamEvent, Settings
+from ..core.contracts import Settings
 from ..report.dispatcher import ReportDispatcher
 from ..report.models import ReportSeverity
 from .queue import EpisodeQueue

@@ -6,10 +6,8 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import sys
 from pathlib import Path
-from typing import Any, Optional
 
 from ..config import JanusSettings, load_config
 from ..engine.server import FalkorDBServerManager
