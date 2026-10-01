@@ -397,6 +397,22 @@ def _apply_home_relative_paths(cfg: "JanusSettings", home: Path) -> None:
     are left untouched so operators can still pin a path to e.g.
     ``/var/lib/janus-graph`` on production hosts.
 
+    The ``isinstance(current, Path)`` branch is NOT dead code. Every field is
+    annotated ``str``, so the pydantic *constructor* rejects a ``Path`` outright
+    (ValidationError: "Input should be a valid string") — it does not coerce.
+    But no model sets ``validate_assignment``, so ``cfg.engine.log_file =
+    Path(...)`` after construction is accepted verbatim and lands here. The
+    branch also preserves the ``Path`` type on rewrite instead of str()-coercing
+    it, which is why it must stay: without it a ``Path`` would fall through to
+    the str branch and silently change type for its holder.
+
+    Operator-pinned fields are recorded in ``pinned`` so the mkdir pass below
+    can honour the same decision. It must key off ``pinned`` rather than
+    re-testing ``is_absolute()`` on the value it now reads: every value pass 1
+    rewrites is absolute *by construction*, so a bare ``is_absolute()`` guard
+    there would skip every mkdir and the SQLite/log parents would never be
+    created.
+
     ``dotted`` keys can be 2-4 levels deep (e.g. ``report.sinks.file.path``).
     Only the leaf is rewritten; intermediate objects keep their identity so
     any caller holding a reference to e.g. ``cfg.report.sinks.file`` still
@@ -405,6 +421,7 @@ def _apply_home_relative_paths(cfg: "JanusSettings", home: Path) -> None:
     Called from ``JanusSettings.model_post_init`` after forward-ref defaults
     are resolved.
     """
+    pinned: set[str] = set()
     for dotted in _HOME_RELATIVE_PATH_FIELDS:
         parts = dotted.split(".")
         leaf = parts[-1]
@@ -414,20 +431,35 @@ def _apply_home_relative_paths(cfg: "JanusSettings", home: Path) -> None:
         current = getattr(parent, leaf)
         if isinstance(current, Path):
             if current.is_absolute():
+                pinned.add(dotted)
                 continue
             new_path = (home / current).resolve()
             setattr(parent, leaf, new_path)
             continue
         if not isinstance(current, str):
             continue
-        if not current or Path(current).is_absolute():
+        if not current:
+            continue
+        if Path(current).is_absolute():
+            pinned.add(dotted)
             continue
         new_path = (home / current).resolve()
         setattr(parent, leaf, str(new_path))
     # Ensure parent dirs exist for file paths (logs/quirks/report) and the
     # SQLite parent. We deliberately do NOT mkdir() the bin_dir — that's the
     # operator's responsibility to populate. data_dir (falkordb rdb home) is
-    # created so BGSAVE dump.rdb can land without churn later.
+    # created so BGSAVE dump.rdb can land without churn later. Fields the
+    # operator pinned absolute above are skipped: pass 1 already declared
+    # them off-limits, and mkdir'ing e.g. /var/lib/... without root raised
+    # PermissionError at settings construction.
+    #
+    # engine.pid_file is absent on purpose, not by oversight. Its parent is
+    # already covered twice over: the stock config layout puts the pid inside
+    # data_dir (./data/falkordb/falkordb.pid), which IS mkdir'd above, and
+    # the only consumer mkdirs its own parent anyway --
+    # engine/server.py:FalkorDBServerManager.start() calls
+    # ``self.pid_file.parent.mkdir(parents=True, exist_ok=True)`` immediately
+    # before exec'ing redis-server. Listing it here would be redundant.
     for dotted in (
         "pipeline.queue_db_path",
         "heuristics.quirks_log_path",
@@ -441,7 +473,7 @@ def _apply_home_relative_paths(cfg: "JanusSettings", home: Path) -> None:
         for segment in parts[:-1]:
             parent = getattr(parent, segment)
         current = getattr(parent, leaf)
-        if not current:
+        if not current or dotted in pinned:
             continue
         p = Path(current)
         is_dir = dotted in ("engine.data_dir",)
