@@ -47,6 +47,7 @@ heuristics:
     - "edge_duplicate"
     - "extracted_edges"
     - "node_resolutions"
+    - "extracted_entities"
   quirks_log_path: "./data/logs/llm_schema_quirks.jsonl"
   metrics_enabled: true
 
