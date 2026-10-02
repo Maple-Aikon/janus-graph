@@ -101,12 +101,22 @@ class DlqReplayConfig(BaseModel):
     ``last_error`` LIKE match against ``classes`` (case-insensitive).
 
     Defaults target the two replayable failure classes:
-      - ``SCHEMA_DRIFT`` — fixed by heuristics on 2026-09-15, safe to retry
+      - ``SCHEMA_DRIFT`` — retryable ONLY for the schemas that a heuristic
+        rule actually claims. The repair happens at ingest time in
+        ``HeuristicRegistry.find_rule``; replay alone cannot fix a row whose
+        schema has no rule (it just re-fails and burns an attempt). As of
+        2026-10-02 the rules cover ExtractedEdges, ExtractedEntities,
+        SummarizedEntities, EntityResolutions/NodeResolutions and
+        EdgeDuplicate. A new schema needs a rule before replay is useful.
       - ``TIMEOUT`` — transient embed API slowness, may recover
 
     Explicitly skipped classes:
       - ``BUDGET_EXCEEDED`` — LiteLLM $5/day cap, won't reset until next day
       - ``UNAVAILABLE_503`` — provider outage, retrying makes things worse
+
+    Note: a row whose repair yields an empty list still passes
+    ``model_validate`` and is logged as ``event_type=repair``, so a clean
+    replay count does not prove the data survived. Check the quirks log.
     """
 
     enabled: bool = True

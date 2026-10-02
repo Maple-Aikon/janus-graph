@@ -82,18 +82,149 @@ def test_extracted_entities_rule():
     assert rule.name == "extracted_entities"
     assert rule.can_repair("ExtractedEntities", {})
 
+    # Every repaired entity is normalised: entity_type_id and episode_indices
+    # are required/ defaulted by graphiti_core, so the rule always fills them.
+    def norm(name, **kw):
+        out = {"name": name, "entity_type_id": 0, "episode_indices": [0]}
+        out.update(kw)
+        return out
+
     # Signature 2: entities key alias
     repaired = rule.repair("ExtractedEntities", {"entities": [{"name": "Maple"}]})
-    assert repaired == {"extracted_entities": [{"name": "Maple"}]}
+    assert repaired == {"extracted_entities": [norm("Maple")]}
 
     # Signature 4: Bare list
     repaired_list = rule.repair("ExtractedEntities", [{"name": "Alice"}, {"name": "Bob"}])
-    assert repaired_list == {"extracted_entities": [{"name": "Alice"}, {"name": "Bob"}]}
+    assert repaired_list == {
+        "extracted_entities": [norm("Alice"), norm("Bob")]
+    }
 
     # Nested properties wrapper
     nested = {"properties": {"extracted_entities": [{"name": "Thúy Vi"}]}}
     repaired_nested = rule.repair("ExtractedEntities", nested)
-    assert repaired_nested == {"extracted_entities": [{"name": "Thúy Vi"}]}
+    assert repaired_nested == {"extracted_entities": [norm("Thúy Vi")]}
+
+
+def test_extracted_entities_preserves_string_entity_type():
+    """A string ``entity_type`` label is kept, and the id defaults to 0."""
+    rule = ExtractedEntitiesRule()
+    repaired = rule.repair(
+        "ExtractedEntities", {"entities": [{"name": "Maple", "entity_type": "person"}]}
+    )
+    got = repaired["extracted_entities"][0]
+    assert got["entity_type"] == "person"
+    assert got["entity_type_id"] == 0
+
+
+def test_extracted_entities_bool_type_id_is_not_one():
+    """bool is a subclass of int, so int(True) == 1 would misclassify."""
+    rule = ExtractedEntitiesRule()
+    repaired = rule.repair(
+        "ExtractedEntities", [{"name": "X", "entity_type_id": True}]
+    )
+    assert repaired["extracted_entities"][0]["entity_type_id"] == 0
+
+
+def test_extracted_entities_coerces_string_indices():
+    rule = ExtractedEntitiesRule()
+    repaired = rule.repair(
+        "ExtractedEntities",
+        [{"name": "X", "entity_type_id": 2, "episode_indices": "4"}],
+    )
+    assert repaired["extracted_entities"][0]["episode_indices"] == [4]
+
+
+def test_extracted_entities_repairs_json_string_payload():
+    rule = ExtractedEntitiesRule()
+    repaired = rule.repair(
+        "ExtractedEntities", '{"extracted_entities": [{"name": "E"}]}'
+    )
+    assert repaired == {
+        "extracted_entities": [{"name": "E", "entity_type_id": 0, "episode_indices": [0]}]
+    }
+
+
+# ---------------------------------------------------------------------------
+# SummarizedEntities (added 2026-10-02)
+#
+# Before this, SummarizedEntities had NO rule at all: HeuristicRegistry
+# .find_rule returned None, repairing_client re-raised, and 21 DLQ rows sat
+# unrepairable. Shapes below are taken from the real dead_letter rows.
+# ---------------------------------------------------------------------------
+
+
+def test_summarized_entities_is_claimed_by_the_rule():
+    rule = ExtractedEntitiesRule()
+    assert rule.can_repair("SummarizedEntities", {})
+    assert "SummarizedEntities" in rule.target_schema_names
+    assert rule.target_schema_names == ["ExtractedEntities", "SummarizedEntities"]
+
+
+def test_registry_resolves_summarized_entities():
+    registry = HeuristicRegistry()
+    assert registry.find_rule("SummarizedEntities", {}, None) is not None
+    assert registry.find_rule("NoSuchSchema", {}, None) is None
+
+
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        # {"summaries": [...]} — already correct
+        ({"summaries": [{"name": "A", "summary": "s"}]}, [{"name": "A", "summary": "s"}]),
+        # alias
+        ({"summarized_entities": [{"name": "B"}]}, [{"name": "B", "summary": ""}]),
+        # properties wrapper (real DLQ shape)
+        ({"properties": {"summaries": [{"name": "C"}]}}, [{"name": "C", "summary": ""}]),
+        # pydantic hands us the *inner* entity, not the envelope (real DLQ)
+        ({"name": "D"}, [{"name": "D", "summary": ""}]),
+        # JSON-Schema array echo (real DLQ shape)
+        ({"items": [{"name": "E"}], "type": "array"}, [{"name": "E", "summary": ""}]),
+        # class-name wrapper, list form (real DLQ shape)
+        ({"SummarizedEntity": [{"name": "F", "summary": "t"}]}, [{"name": "F", "summary": "t"}]),
+        # class-name wrapper, bare string form (real DLQ shape)
+        ({"SummarizedEntity": "MEMORY.md"}, [{"name": "<unnamed>", "summary": "MEMORY.md"}]),
+        # one-element set under the class name (real DLQ shape, 2026-09-30)
+        ({"SummarizedEntity": {"one item"}}, [{"name": "<unnamed>", "summary": "one item"}]),
+        # bare list
+        ([{"name": "G", "summary": "v"}], [{"name": "G", "summary": "v"}]),
+        # bare string inside a list
+        (["plain text"], [{"name": "<unnamed>", "summary": "plain text"}]),
+        # raw JSON string
+        ('{"summaries": [{"name": "H", "summary": "w"}]}', [{"name": "H", "summary": "w"}]),
+    ],
+)
+def test_summarized_entities_repair_shapes(payload, expected):
+    rule = ExtractedEntitiesRule()
+    assert rule.repair("SummarizedEntities", payload) == {"summaries": expected}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        # A JSON-Schema echo carries no entity data; an empty list is the
+        # honest repair. It must NOT be mistaken for a successful rescue.
+        {"$defs": {"SummarizedEntity": {"type": "object"}}},
+        {"type": "object", "properties": {}},
+    ],
+)
+def test_summarized_entities_empty_only_when_no_data(payload):
+    rule = ExtractedEntitiesRule()
+    assert rule.repair("SummarizedEntities", payload) == {"summaries": []}
+
+
+def test_summarized_entities_output_passes_real_schema():
+    """Guards against a repair that validates against nothing."""
+    extract_nodes = pytest.importorskip("graphiti_core.prompts.extract_nodes")
+    rule = ExtractedEntitiesRule()
+    for payload in (
+        {"SummarizedEntity": "MEMORY.md"},
+        {"SummarizedEntity": {"one item"}},
+        {"items": [{"name": "E"}], "type": "array"},
+        {"name": "D"},
+    ):
+        repaired = rule.repair("SummarizedEntities", payload)
+        extract_nodes.SummarizedEntities.model_validate(repaired)
 
 
 # ---------------------------------------------------------------------------

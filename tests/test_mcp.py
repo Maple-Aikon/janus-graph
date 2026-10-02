@@ -112,6 +112,7 @@ async def test_mcp_cache_and_report_stats(temp_dir: Path):
     )
 
     cfg = JanusSettings()
+    cfg.pipeline.queue_db_path = str(temp_dir / "episodes.db")
     cfg.report.sinks.file.path = str(log_path)
     mcp = create_mcp_server(cfg)
 
@@ -131,9 +132,65 @@ async def test_mcp_cache_and_report_stats(temp_dir: Path):
 @pytest.mark.asyncio
 async def test_mcp_cypher_query_blocks_mutation(temp_dir: Path):
     cfg = JanusSettings()
+    cfg.pipeline.queue_db_path = str(temp_dir / "episodes.db")
     mcp = create_mcp_server(cfg)
 
     res = await mcp.call_tool("cypher_query", {"query": "CREATE (n:Node) RETURN n"})
     struct = _get_struct(res)
     assert struct["success"] is False
     assert struct["blocked_keyword"] == "CREATE"
+
+
+def test_bare_settings_never_touch_the_fallback_home(monkeypatch, tmp_path: Path):
+    """Opening a queue on a default-constructed config must not write to ~/.janus-graph.
+
+    ``_resolve_home()`` falls back to ``~/.janus-graph`` whenever
+    JANUS_GRAPH_HOME is unset, so a bare ``JanusSettings()`` resolves
+    ``queue_db_path`` to a real path outside the repo. Two tests in this file
+    used to build a real EpisodeQueue from such a config, which recreated a
+    0-row episodes.db on every pytest run — an empty database that reads
+    exactly like a healthy idle queue. Hence the explicit pin at each call site.
+
+    Note the split, verified 2026-10-02: ``JanusSettings()`` itself only
+    mkdir's the parent (data/, data/falkordb/, data/logs/); the .db FILE is
+    created by EpisodeQueue. So the directory is expected to appear here and
+    only the file is the leak.
+    """
+    home = tmp_path / "fake_home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("JANUS_GRAPH_HOME", raising=False)
+
+    cfg = JanusSettings()
+    fb = home / ".janus-graph"
+    assert cfg.pipeline.queue_db_path == str(fb / "data" / "episodes.db")
+
+    # Constructing the settings makes the parent dir, but no database.
+    assert fb.is_dir()
+    assert not (fb / "data" / "episodes.db").exists()
+
+    # Pinning is what keeps EpisodeQueue away from the fallback.
+    pinned = tmp_path / "pinned.db"
+    cfg.pipeline.queue_db_path = str(pinned)
+    EpisodeQueue(db_path=cfg.pipeline.queue_db_path)
+    assert pinned.exists(), "the pinned queue was not created"
+    assert not (fb / "data" / "episodes.db").exists(), "test wrote into the fallback HOME"
+
+
+def test_unpinned_queue_would_write_to_the_fallback_home(monkeypatch, tmp_path: Path):
+    """Negative control: proves the assertion above can actually fail.
+
+    Without this, the test above would also pass if the fallback simply
+    stopped existing for some unrelated reason.
+    """
+    home = tmp_path / "fake_home2"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("JANUS_GRAPH_HOME", raising=False)
+
+    cfg = JanusSettings()
+    EpisodeQueue(db_path=cfg.pipeline.queue_db_path)  # deliberately NOT pinned
+
+    leaked = home / ".janus-graph" / "data" / "episodes.db"
+    assert leaked.exists(), (
+        "the unpinned path no longer leaks — update the fix in "
+        "test_mcp_cache_and_report_stats / test_mcp_cypher_query_blocks_mutation"
+    )
