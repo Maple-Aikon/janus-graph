@@ -92,6 +92,8 @@ class ReportDispatcher:
         elif isinstance(cfg, Settings):
             # Handle frozen Settings dataclass
             if "file" in cfg.report.sinks:
+                # contracts.ReportSettings.file_path is a bare relative Path;
+                # FileSink now anchors it to home, so this cannot land in cwd.
                 sinks.append(FileSink(path=str(cfg.report.file_path)))
             if "cli" in cfg.report.sinks:
                 sinks.append(CLISink(subprocess_method=cfg.report.cli.pipe_subprocess_method))

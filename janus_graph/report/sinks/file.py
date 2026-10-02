@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ...config import resolve_home_relative
 from ..models import ReportEvent
 from . import BaseSink
 
@@ -15,7 +16,11 @@ class FileSink(BaseSink):
     def __init__(
         self, path: str = "./data/logs/janus_report.jsonl", rotation_max_bytes: int = 10485760
     ):
-        self.path = Path(path).resolve()
+        # Anchor to home: ``Path(path).resolve()`` on a relative literal
+        # resolves against os.getcwd() and writes the report JSONL next to
+        # whatever directory the process was launched from. See
+        # janus_graph.config.resolve_home_relative.
+        self.path = Path(resolve_home_relative(str(path)))
         self.rotation_max_bytes = rotation_max_bytes
 
     @property

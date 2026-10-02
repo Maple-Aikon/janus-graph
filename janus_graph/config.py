@@ -453,6 +453,34 @@ def _resolve_home() -> Path:
     return (Path.home() / ".janus-graph").resolve()
 
 
+def resolve_home_relative(raw: str) -> str:
+    """Anchor a possibly-relative path to ``JANUS_GRAPH_HOME``.
+
+    The single helper modules use instead of ``Path(raw).resolve()`` on a
+    relative literal. ``Path.resolve()`` on a relative path resolves against
+    ``os.getcwd()`` -- so a bare default like ``"./data/queue.db"`` silently
+    becomes ``<cwd>/data/queue.db`` and the process grows a second,
+    CWD-scoped SQLite database it never meant to create. On 2026-10-02 a
+    bare ``EpisodeQueue()`` run from ``/tmp`` resolved to
+    ``/tmp/data/queue.db`` (pinned by
+    ``tests/test_queue_path_anchoring.py``).
+
+    Absolute inputs are returned untouched so operators can still pin a path
+    to e.g. ``/var/lib/janus-graph``; relative inputs are joined onto the
+    home and returned already-resolved.
+
+    This reuses ``_resolve_home``'s precedence (env var, then
+    ``~/.janus-graph``), so a path anchored here matches what
+    ``JanusSettings.model_post_init`` produces for the same field. It is
+    separate from ``_apply_home_relative_paths`` because that walks a
+    settings *tree*; this resolves one bare literal.
+    """
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str((_resolve_home() / path).resolve())
+
+
 def _resolve_default_yaml_file() -> Optional[Path]:
     """Locate the config YAML file.
 

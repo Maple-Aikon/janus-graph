@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
 
-from ..config import JanusSettings, load_config
+from ..config import JanusSettings, load_config, resolve_home_relative
 from ..core.contracts import Settings
 from ..report.dispatcher import ReportDispatcher
 from ..report.models import ReportSeverity
@@ -63,10 +63,19 @@ async def run_cron_sweep(
         if hasattr(cfg.pipeline, "attempt_timeout_sec")
         else PROCESSING_TIMEOUT_SECONDS
     )
-    db_path = (
-        cfg.pipeline.queue_db_path if hasattr(cfg.pipeline, "queue_db_path") else "./data/queue.db"
-    )
-    queue = EpisodeQueue(str(db_path))
+    # Same hasattr guard as dream.py: contracts.Settings keeps the path
+    # under ``paths``. Measured 2026-10-02: a bare contracts.Settings raises
+    # AttributeError on ``pipeline.drain_batch_size`` at the line ABOVE this
+    # one, so that path is unreachable *today* -- this is defence-in-depth for
+    # the day contracts.PipelineSettings grows drain_batch_size, and the
+    # branch must not become cwd-relative when it does.
+    pipeline_path = getattr(cfg.pipeline, "queue_db_path", None)
+    if pipeline_path is None:
+        pipeline_path = getattr(cfg.paths, "queue_db_path", None)
+    if pipeline_path is None:
+        pipeline_path = "./data/queue.db"
+    db_path = resolve_home_relative(str(pipeline_path))
+    queue = EpisodeQueue(db_path)
     worker = EpisodeWorker(queue, cfg)
     dispatcher = ReportDispatcher.from_settings(cfg)
 

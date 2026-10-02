@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..config import resolve_home_relative
+
 logger = logging.getLogger("janus_graph.pipeline.queue")
 
 SCHEMA = """
@@ -106,7 +108,10 @@ class EpisodeQueue:
     """Thread-safe and async-safe SQLite WAL queue manager."""
 
     def __init__(self, db_path: str = "./data/queue.db", busy_timeout_ms: int = 5000):
-        self.db_path = Path(db_path).resolve()
+        # NEVER ``Path(db_path).resolve()`` on a raw literal here: that
+        # anchors a relative path to os.getcwd(). See
+        # resolve_home_relative for the 2026-10-02 repro.
+        self.db_path = Path(resolve_home_relative(db_path))
         self.busy_timeout_ms = busy_timeout_ms
         self._conn: Optional[sqlite3.Connection] = None
         self._init_lock = asyncio.Lock()

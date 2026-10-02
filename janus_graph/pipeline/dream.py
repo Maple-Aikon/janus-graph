@@ -11,7 +11,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
 
-from ..config import JanusSettings, load_config
+from ..config import JanusSettings, load_config, resolve_home_relative
 from ..core.contracts import Settings
 from ..report.dispatcher import ReportDispatcher
 from ..report.models import ReportSeverity
@@ -76,10 +76,17 @@ async def run_dream_consolidation(
 ) -> Dict[str, Any]:
     """Execute Dream Mode memory consolidation phases with full undo log."""
     cfg = settings or load_config()
-    db_path = (
-        cfg.pipeline.queue_db_path if hasattr(cfg.pipeline, "queue_db_path") else "./data/queue.db"
-    )
-    queue = EpisodeQueue(str(db_path))
+    # contracts.Settings keeps the queue path under ``paths``, not
+    # ``pipeline``, so the old hasattr guard was False for that type and
+    # the relative literal WAS reachable here: dream runs to completion on a
+    # bare contracts.Settings and opened <cwd>/data/queue.db. Anchor at home.
+    pipeline_path = getattr(cfg.pipeline, "queue_db_path", None)
+    if pipeline_path is None:
+        pipeline_path = getattr(cfg.paths, "queue_db_path", None)
+    if pipeline_path is None:
+        pipeline_path = "./data/queue.db"
+    db_path = resolve_home_relative(str(pipeline_path))
+    queue = EpisodeQueue(db_path)
     dispatcher = ReportDispatcher.from_settings(cfg)
 
     run_id = str(uuid.uuid4())

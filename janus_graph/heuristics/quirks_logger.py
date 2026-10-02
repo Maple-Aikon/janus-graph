@@ -15,6 +15,12 @@ class QuirksLogger:
     """
 
     def __init__(self, log_path: str = "./data/logs/llm_schema_quirks.jsonl"):
+        # NOTE: this default is still cwd-relative (Path.resolve() on a
+        # relative literal). Left unchanged 2026-10-02 because it is
+        # unreachable: core/instance.py:49-53 builds the only non-test
+        # SchemaRepairingLLMClient and passes cfg.heuristics.quirks_log_path,
+        # which model_post_init has already anchored to JANUS_GRAPH_HOME.
+        # Fixing it is defence-in-depth only, same class as cron.py:66.
         self.log_path = Path(log_path).resolve()
 
     def log_schema_quirk(
