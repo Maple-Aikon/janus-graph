@@ -129,6 +129,7 @@ async def run_cron_sweep(
         "duration_ms": duration_ms,
         "queued_remaining": stats_final.get("queued", 0),
         "dlq_count": stats_final.get("dlq", 0),
+        "total_episodes": queue.count_total(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

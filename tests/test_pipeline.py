@@ -1,6 +1,8 @@
 """Tests for Pipeline Worker, Cron Sweeper, and Dream Mode Consolidation."""
 
 import asyncio
+import json
+import sqlite3
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -105,6 +107,67 @@ async def test_cron_sweep(temp_dir):
                 assert summary["failed"] == 0
 
     assert report_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_cron_sweep_reports_total_episodes(temp_dir):
+    """The sweep summary must carry the episodes-table total, not a partial slice.
+
+    Three rows go in, and they end in three *different* statuses, so the
+    total can only be right if every status is counted:
+
+      - one succeeds        (done)
+      - one is left alone   (queued)
+      - one is aborted      (aborted, and lands in dead_letter)
+
+    The aborted row is the point of the test: it makes ``get_stats()`` report
+    ``dlq=1``, so a report that summed get_stats() would claim 4 episodes for
+    a 3-row table. Asserting against a real ``SELECT COUNT(*)`` pins the
+    difference instead of trusting any particular status arithmetic.
+    """
+    db_path = temp_dir / "totep_queue.db"
+    report_path = temp_dir / "totep_report.jsonl"
+
+    settings = Settings(
+        report=ReportSettings(
+            sinks=("file",),
+            file_path=Path(report_path),
+        )
+    )
+
+    queue = EpisodeQueue(str(db_path))
+    done_id = await queue.enqueue("Memory that succeeds")
+    await queue.enqueue("Memory that stays queued")
+    aborted_id = await queue.enqueue("Memory that is aborted")
+    await queue.mark_aborted(aborted_id, "Test error")
+
+    mock_client = AsyncMock()
+    mock_client.add_episode = AsyncMock(return_value=None)
+
+    with patch("janus_graph.core.instance.create_graphiti_instance", return_value=mock_client):
+        with patch.object(queue, "db_path", db_path):
+            with patch("janus_graph.pipeline.cron.EpisodeQueue", return_value=queue):
+                summary = await run_cron_sweep(settings=settings, batch_size=1)
+
+    # Ground truth: the table itself, not any aggregation of it.
+    with sqlite3.connect(str(db_path)) as conn:
+        real_total = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+
+    assert "total_episodes" in summary, "sweep summary lost the total_episodes key"
+    assert summary["total_episodes"] == real_total
+    # Guard the trap explicitly: the DLQ row is not an episode row.
+    assert summary["dlq_count"] == 1
+    assert summary["total_episodes"] != real_total + summary["dlq_count"]
+    # And it must not be confused with the backlog slice it sits next to.
+    assert summary["total_episodes"] >= summary["queued_remaining"]
+    assert done_id != aborted_id
+
+    # The key must survive into the emitted report, not just the return value.
+    assert report_path.exists()
+    events = [json.loads(line) for line in report_path.read_text().splitlines() if line.strip()]
+    sweeps = [e for e in events if e.get("kind") == "cron_sweep"]
+    assert sweeps, "no cron_sweep report was written"
+    assert sweeps[-1]["details"]["total_episodes"] == real_total
 
 
 def test_dream_label_propagation():

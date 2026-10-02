@@ -594,6 +594,18 @@ class EpisodeQueue:
             stats["dlq"] = dlq_cur.fetchone()["count"]
             return stats
 
+    def count_total(self) -> int:
+        """Return the total number of ``episodes`` rows, every status included.
+
+        Kept separate from :meth:`get_stats` on purpose: that dict mixes the
+        real statuses with the synthetic ``dlq`` key, so summing its values
+        inflates the total by the open dead-letter count. No code path DELETEs
+        from ``episodes``, so this number only ever grows.
+        """
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT COUNT(*) as count FROM episodes")
+            return int(cur.fetchone()["count"])
+
     def get_dlq_records(self, limit: int = 20) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cur = conn.execute(
