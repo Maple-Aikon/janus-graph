@@ -95,9 +95,7 @@ def test_extracted_entities_rule():
 
     # Signature 4: Bare list
     repaired_list = rule.repair("ExtractedEntities", [{"name": "Alice"}, {"name": "Bob"}])
-    assert repaired_list == {
-        "extracted_entities": [norm("Alice"), norm("Bob")]
-    }
+    assert repaired_list == {"extracted_entities": [norm("Alice"), norm("Bob")]}
 
     # Nested properties wrapper
     nested = {"properties": {"extracted_entities": [{"name": "Thúy Vi"}]}}
@@ -119,9 +117,7 @@ def test_extracted_entities_preserves_string_entity_type():
 def test_extracted_entities_bool_type_id_is_not_one():
     """bool is a subclass of int, so int(True) == 1 would misclassify."""
     rule = ExtractedEntitiesRule()
-    repaired = rule.repair(
-        "ExtractedEntities", [{"name": "X", "entity_type_id": True}]
-    )
+    repaired = rule.repair("ExtractedEntities", [{"name": "X", "entity_type_id": True}])
     assert repaired["extracted_entities"][0]["entity_type_id"] == 0
 
 
@@ -136,9 +132,7 @@ def test_extracted_entities_coerces_string_indices():
 
 def test_extracted_entities_repairs_json_string_payload():
     rule = ExtractedEntitiesRule()
-    repaired = rule.repair(
-        "ExtractedEntities", '{"extracted_entities": [{"name": "E"}]}'
-    )
+    repaired = rule.repair("ExtractedEntities", '{"extracted_entities": [{"name": "E"}]}')
     assert repaired == {
         "extracted_entities": [{"name": "E", "entity_type_id": 0, "episode_indices": [0]}]
     }

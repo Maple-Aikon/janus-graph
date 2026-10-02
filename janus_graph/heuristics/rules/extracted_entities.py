@@ -181,9 +181,7 @@ class ExtractedEntitiesRule(HeuristicRule):
     ) -> Dict[str, Any]:
         is_summaries = schema_name == "SummarizedEntities"
         default_key = "summaries" if is_summaries else "extracted_entities"
-        normalize = (
-            _normalize_summarized_entity if is_summaries else _normalize_extracted_entity
-        )
+        normalize = _normalize_summarized_entity if is_summaries else _normalize_extracted_entity
 
         def done(items: List[Any]) -> Dict[str, Any]:
             return {default_key: [normalize(e) for e in items]}

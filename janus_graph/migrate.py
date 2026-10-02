@@ -57,7 +57,12 @@ def convert_legacy_dict(legacy_data: Dict[str, Any]) -> Dict[str, Any]:
         },
         "heuristics": {
             "auto_repair": True,
-            "active_rules": ["edge_duplicate", "extracted_edges", "node_resolutions"],
+            "active_rules": [
+                "edge_duplicate",
+                "extracted_edges",
+                "node_resolutions",
+                "extracted_entities",
+            ],
         },
         "cache": {
             "embed": {
