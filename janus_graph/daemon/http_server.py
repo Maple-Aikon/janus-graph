@@ -368,6 +368,28 @@ async def search_graph_handler(request: web.Request) -> web.Response:
                     {"code": "INVALID_BODY", "message": f"{key} must be int"},
                     status=400,
                 )
+        elif key in ("min_cosine", "mmr_lambda"):
+            # 2026-10-04: these two were passed through as raw strings, which
+            # the engine cannot accept -- a query string never yields a Python
+            # float. The two failure modes were very different:
+            #   min_cosine="0.3" -> validate_request's isinstance check fails
+            #     -> 422 MIN_COSINE_OUT_OF_RANGE (loud, but a VALID value was
+            #     rejected, so min_cosine was unreachable over HTTP and the
+            #     engine default 0.5 always won -> step 5 deleted every row
+            #     -> HTTP 200 with count=0).
+            #   mmr_lambda="0.3" -> validate_request treats out-of-range as
+            #     "degrade but keep results" and silently substitutes the
+            #     default, so the caller got 0.7 with no error at all.
+            # Coerce here (transport concern, like int above) and leave the
+            # RANGE check to validate_request (semantic concern), which is
+            # the same split the sibling int params already use.
+            try:
+                payload[key] = float(raw)
+            except ValueError:
+                return web.json_response(
+                    {"code": "INVALID_BODY", "message": f"{key} must be a number"},
+                    status=400,
+                )
         elif key == "include_episodes":
             payload[key] = raw.lower() in ("1", "true", "yes")
         else:

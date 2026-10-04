@@ -53,6 +53,14 @@ class DaemonSearchGraphSettings(BaseModel):
 
     enabled: bool = True
     max_facts_per_query: int = 5000  # hard cap before rerank
+    # Facts actually EMBEDDED. Measured 2026-10-04 on :8081 (multilingual-e5
+    # q8_0): ~24 ms/text linear, so 200 texts = 4.8 s against the client's
+    # 10.0 s budget. max_facts_per_query above is the traversal ceiling and
+    # stays 5000; this is the pre-embed trim that keeps a deep BFS alive.
+    embed_max_facts: int = 200
+    # In-process LRU for per-text vectors. Facts repeat heavily across
+    # overlapping seeds and hops, so a warm cache cuts the upstream batch.
+    embed_cache_size: int = 10000
     traversal_timeout_sec: float = 2.0  # 504 budget
     embedding_concurrency: int = 4  # semaphore for nomic-embed batch
     default_min_cosine: float = 0.5  # post-filter threshold

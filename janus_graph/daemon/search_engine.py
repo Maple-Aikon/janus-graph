@@ -165,6 +165,7 @@ RETURN
   edge_fact,
   [n IN ns | n.name][0] AS seed_in_path,
   ns[i + 1].name AS target_in_path
+ORDER BY hop_distance ASC, edge_fact ASC
 LIMIT {cap}
 """
 
@@ -341,8 +342,15 @@ class SearchEngine:
         fact_rows: List[FactRow] = list(rows)
 
         # Step 4 — cosine via EmbeddingClient (batched per fact).
+        # ``_attach_cosine`` trims to ``embed_max_facts`` and reports how many
+        # rows it actually scored, so `degraded` below reflects the EMBEDDED
+        # rows only. Judging it over all of ``fact_rows`` would keep the flag
+        # True forever, because the deliberately-skipped tail never gets a
+        # cosine by design — a trimming feature would masquerade as a
+        # failing embedder.
+        embedded_count = 0
         if fact_rows:
-            await self._attach_cosine(fact_rows, payload.get("query"))
+            embedded_count = await self._attach_cosine(fact_rows, payload.get("query"))
 
         # Step 5 — filter: cosine < min_cosine OR invalid_at != None.
         filtered = [
@@ -355,12 +363,25 @@ class SearchEngine:
         # mmr_lambda == 0 (pure diversity) or == 1 (pure relevance).
         ranked = self._mmr_rerank(filtered, req["mmr_lambda"], req["limit"])
 
+        # A row that was never EMBEDDED is not a failure. ``degraded`` must
+        # mean "the embedder did not deliver", never "we chose to skip work",
+        # or the trimming feature would be indistinguishable from an outage.
+        degraded = any(r.cosine is None for r in fact_rows[:embedded_count])
+
+        # The skip is disclosed separately: `warnings` says it happened,
+        # `degraded` stays False because the scoring itself succeeded.
+        if embedded_count < len(fact_rows):
+            warnings.append(
+                "fact_count_capped: scored %d of %d facts (embed_max_facts)"
+                % (embedded_count, len(fact_rows))
+            )
+
         elapsed_ms = int((time.monotonic() - start_ts) * 1000)
         return SearchResponse(
             results=ranked[: req["limit"]],
             count=len(ranked[: req["limit"]]),
             elapsed_ms=elapsed_ms,
-            degraded=bool(warnings) or any(r.cosine is None for r in fact_rows),
+            degraded=degraded,
             warnings=warnings,
         )
 
@@ -459,25 +480,40 @@ class SearchEngine:
                 logger.debug("malformed bfs row %r: %s", row, e)
         return out
 
-    async def _attach_cosine(self, rows: List[FactRow], query: Optional[str]) -> None:
+    async def _attach_cosine(self, rows: List[FactRow], query: Optional[str]) -> int:
         """Embed each fact via EmbeddingClient; compute cosine to query.
+
+        Returns the number of rows actually scored, which is what the caller
+        needs to decide ``degraded``: rows past the trim never get a cosine
+        *by design*, and counting them as failures would be a lie.
 
         If query is not provided, we use the first seed as the implicit
         query (callers usually pass it via the request payload — the
         handler sets ``payload["query"] = payload.get("seed_entities", [""])[0]``).
+
+        Rows are trimmed to ``embed_max_facts`` BEFORE embedding. Embedding is
+        the whole cost of this endpoint (~24 ms/text measured 2026-10-04):
+        a 2-hop BFS that returns 3219 rows would need ~77 s and be killed by
+        the embedding client's 10 s budget, degrading every row to
+        cosine=None. The rows are already ordered by (hop_distance,
+        edge_fact), so the trim keeps the nearest hops and is stable.
         """
         if not query:
             query = rows[0].fact if rows else ""
+        cap = self._settings.embed_max_facts
+        if cap and len(rows) > cap:
+            rows = rows[:cap]
         texts = [r.fact for r in rows] + [query]
         embeds = await self._embed.embed(texts)
         if not embeds or any(e.embedding is None for e in embeds):
             # Embedding failed → leave cosine=None; pipeline flags degraded.
-            return
+            return len(rows)
         query_vec = embeds[-1].embedding
         for idx, row in enumerate(rows):
             row.cosine = (
                 _cosine(query_vec, embeds[idx].embedding) if embeds[idx].embedding else None
             )
+        return len(rows)
 
     def _mmr_rerank(self, rows: Sequence[FactRow], lam: float, top_k: int) -> List[FactRow]:
         """Maximal Marginal Relevance rerank.
