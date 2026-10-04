@@ -200,18 +200,64 @@ async def test_get_include_episodes_bool_coercion(base_settings, mock_engine, ra
     assert mock_engine.search.await_args.args[0]["include_episodes"] is expected
 
 
-async def test_get_passes_through_float_and_string_params(base_settings, mock_engine):
-    """min_cosine / mmr_lambda / query stay as raw strings for the engine
-    to validate - the handler must NOT coerce or clamp them."""
+async def test_get_coerces_float_params_not_pass_through(base_settings, mock_engine):
+    """2026-10-04: min_cosine / mmr_lambda used to be handed to the engine as
+    raw strings. A query string can never yield a Python float, so the engine
+    rejected every valid value: min_cosine="0.3" -> 422, and mmr_lambda="0.3"
+    -> SILENTLY replaced by the default. Coerce at the transport boundary;
+    ``query`` stays a string."""
     ctx = _make_ctx(base_settings, mock_engine)
     resp = await search_graph_handler(
         _get(ctx, "seed_entities=a&max_hops=1&min_cosine=0.9&mmr_lambda=0.3&query=hello")
     )
     assert resp.status == 200
     payload = mock_engine.search.await_args.args[0]
-    assert payload["min_cosine"] == "0.9"
-    assert payload["mmr_lambda"] == "0.3"
-    assert payload["query"] == "hello"
+    assert payload["min_cosine"] == 0.9
+    assert isinstance(payload["min_cosine"], float)
+    assert payload["mmr_lambda"] == 0.3
+    assert isinstance(payload["mmr_lambda"], float)
+    assert payload["query"] == "hello"  # string, not coerced
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("0", 0.0), ("1", 1.0), ("0.0", 0.0), (".5", 0.5), ("1e-1", 0.1)],
+    ids=["int0", "int1", "zero", "leading-dot", "sci"],
+)
+async def test_get_float_params_accepted_shapes(base_settings, mock_engine, raw, expected):
+    """float() shapes a query string actually produces."""
+    ctx = _make_ctx(base_settings, mock_engine)
+    resp = await search_graph_handler(
+        _get(ctx, "seed_entities=a&max_hops=1&min_cosine=" + raw)
+    )
+    assert resp.status == 200
+    assert mock_engine.search.await_args.args[0]["min_cosine"] == expected
+
+
+async def test_get_non_numeric_min_cosine_returns_400(base_settings, mock_engine):
+    """Transport-level garbage -> 400 INVALID_BODY, like max_hops/limit.
+    An in-RANGE-but-wrong-magnitude value (1.5) is NOT handled here: it is
+    passed through as a float and rejected by validate_request as 422."""
+    ctx = _make_ctx(base_settings, mock_engine)
+    resp = await search_graph_handler(
+        _get(ctx, "seed_entities=a&max_hops=1&min_cosine=abc")
+    )
+    assert resp.status == 400
+    body = await _json_of(resp)
+    assert body["code"] == "INVALID_BODY"
+    assert "min_cosine must be a number" in body["message"]
+    mock_engine.search.assert_not_called()
+
+
+async def test_get_in_range_but_high_min_cosine_reaches_engine_as_float(base_settings, mock_engine):
+    """1.5 is a valid FLOAT and an INVALID cosine. The handler must not
+    range-check (that is validate_request's job, 422) and must not stringify."""
+    ctx = _make_ctx(base_settings, mock_engine)
+    resp = await search_graph_handler(
+        _get(ctx, "seed_entities=a&max_hops=1&min_cosine=1.5")
+    )
+    assert resp.status == 200
+    assert mock_engine.search.await_args.args[0]["min_cosine"] == 1.5
 
 
 async def test_get_absent_params_are_omitted_not_nulled(base_settings, mock_engine):

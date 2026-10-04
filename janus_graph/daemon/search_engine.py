@@ -116,29 +116,55 @@ class SearchBackendError(Exception):
 # schema which doesn't have invalid_at on rels; filter is a forward-compat
 # for when Phase 4 graphiti ingest adds it).
 #
-# Schema note (verified 2026-09-07 against graphiti_memory):
-#  - KG has only one rel type: MENTIONS (rel props: uuid, group_id, created_at).
-#  - "Facts" are stored as the target node's ``summary`` property (multi-line
-#    text). Path returns the seed, all hops, and each hop's target summary.
+# Schema note (RE-VERIFIED 2026-10-04 against graphiti_memory, live counts):
+#  - KG has only one rel type: MENTIONS (rel props: uuid, group_id, created_at)
+#    plus a ``fact`` property added by the graphiti ingest.
+#  - 32,862 rels total; 10,686 carry ``r.fact``; 0 carry ``r.summary``.
+#  - 9,805 nodes; 5,404 carry ``n.summary``; 0 carry ``n.fact``.
+#  - Facts therefore live on the RELATIONSHIP, not on the node. The older
+#    note claiming "facts are the target node's summary" was true when
+#    written (2026-09-07) and was superseded by the graphiti ingest.
 #
-# FalkorDB quirks (verified 2026-09-07 against v8.9.241):
+# 2026-10-04 BUGFIX — why this projects r.fact, one row per rel:
+#  The previous form returned ONE row per PATH and read
+#  ``[n IN ns | n.summary][0]`` — index 0 is the SEED node, not the
+#  destination — so every expansion of a seed repeated the seed's own
+#  summary. A 200-row response could hold exactly ONE distinct fact.
+#  Measured live before the fix: 200 rows -> 1 distinct fact.
+#  A second bug compounded it: the path-level ``[r IN rels | ...][0]``
+#  always picked the FIRST relationship, so rows past the first carried
+#  that same edge's fact again.
+#  Fix: UNWIND the path's relationships and emit one row per rel, so each
+#  fact belongs to the edge that actually produced it. Measured live on
+#  seed 'Maple' at the same hops/limit: 200 rows -> 51 distinct facts.
+#
+# FalkorDB quirks (verified 2026-09-07 / 2026-10-04 against v8.9.241):
 #  - Params are baked into the query as ``CYPHER `key`=value ...`` header
 #    (NOT a separate ``params`` arg).
 #  - Array params are not supported at runtime — seeds are inlined as
 #    Cypher literals (``['Maple Aikon', 'Huế']``) by the caller.
+#  - List slice bounds are HALF-OPEN like python: ``ns[0..i]`` EXCLUDES
+#    index i, so the path through rel i is ``[n IN ns | n.name][0..i + 1]``.
 _CYPHER_BFS = """
 UNWIND [{seed_literals}] AS seed_name
 MATCH (s {name: seed_name})
 MATCH path = (s)-[*1..{max_hops}]-(neighbor)
 WHERE ALL(rel IN relationships(path) WHERE rel.invalid_at IS NULL OR true)
-WITH path, relationships(path) AS rels, nodes(path) AS ns, length(path) AS hop_count
+WITH relationships(path) AS rels, nodes(path) AS ns, length(path) AS hop_count
+UNWIND range(0, size(rels) - 1) AS i
+WITH ns, hop_count, i, rels[i] AS r
+WITH ns, hop_count, i, r,
+  CASE WHEN r.fact IS NOT NULL AND r.fact <> '' THEN r.fact
+       WHEN ns[i + 1].summary IS NOT NULL AND ns[i + 1].summary <> '' THEN ns[i + 1].summary
+       ELSE null END AS edge_fact
+WHERE edge_fact IS NOT NULL
 RETURN
-  [r IN rels | type(r)][0] AS edge_type,
+  type(r) AS edge_type,
   hop_count AS hop_distance,
-  [n IN ns | n.name] AS path_nodes,
-  [n IN ns | n.summary][0] AS first_summary,
+  [n IN ns | n.name][0..i + 1] AS path_nodes,
+  edge_fact,
   [n IN ns | n.name][0] AS seed_in_path,
-  [n IN ns | n.name][size(ns) - 1] AS target_in_path
+  ns[i + 1].name AS target_in_path
 LIMIT {cap}
 """
 
@@ -401,13 +427,16 @@ class SearchEngine:
         out: List[FactRow] = []
         for row in rows:
             try:
-                # Query now returns (edge_type, hop, path_nodes, first_summary,
-                # seed_in_path, target_in_path) in 6 flat columns.
-                edge_type, hop, path_nodes, first_summary, seed_in_path, target_in_path = row[:6]
-                if not isinstance(first_summary, str) or not first_summary.strip():
+                # Query returns (edge_type, hop, path_nodes, edge_fact,
+                # seed_in_path, target_in_path) in 6 flat columns, read
+                # positionally. Since 2026-10-04 the 4th column is the
+                # relationship's own fact, one row per rel -- previously it
+                # was the SEED node's summary repeated on every row.
+                edge_type, hop, path_nodes, edge_fact, seed_in_path, target_in_path = row[:6]
+                if not isinstance(edge_fact, str) or not edge_fact.strip():
                     continue
                 first_line = next(
-                    (ln.strip() for ln in first_summary.splitlines() if ln.strip()),
+                    (ln.strip() for ln in edge_fact.splitlines() if ln.strip()),
                     "",
                 )
                 if not first_line:
