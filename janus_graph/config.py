@@ -29,6 +29,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("janus_graph.config")
 
+# Accepted spellings for ``SearchConfig.reranker``, mapped to the recipe names
+# ``engine.search_memory`` looks up. Keys are compared lowercased+stripped.
+# ``reciprocal_rank_fusion`` is the graphiti_core enum value for RRF, so
+# operators copying that spelling get the behaviour they asked for.
+_RERANKER_ALIASES = {
+    "mmr": "mmr",
+    "maximal_marginal_relevance": "mmr",
+    "rrf": "rrf",
+    "reciprocal_rank_fusion": "rrf",
+    "reciprocal-rank-fusion": "rrf",
+    "fusion": "rrf",
+}
+
 
 class EngineConfig(BaseModel):
     """FalkorDB / Redis engine settings."""
@@ -299,6 +312,56 @@ class SearchConfig(BaseModel):
     # So -2.0 is defence-in-depth, NOT an outage fix. Do NOT raise it
     # toward 0.
     reranker_min_score: float = -2.0
+    # ── Which graphiti-core reranker recipe (2026-10-04) ────────────────
+    # Selects the SearchConfig recipe in ``engine.search_memory``; before
+    # this field the recipe was hardcoded to EDGE_HYBRID_SEARCH_MMR.
+    #
+    # ``mmr`` is the default so that a plain restart with no config change
+    # behaves EXACTLY as it did on 2026-10-03. Opting in to ``rrf`` is an
+    # explicit operator action.
+    #
+    # Why rrf is offered at all: measured on this host over 80 queries
+    # (37 tuning + 46 held-out, tmp/holdout_20261004.py), RRF fusion beat
+    # MMR at top-1 on BOTH sets (net +3 and net +9) and is ~15 ms/query
+    # cheaper, because MMR loads every candidate edge's embedding and
+    # builds an O(n^2) pairwise similarity matrix that RRF never needs.
+    #
+    # NOT offered here: ``cross_encoder``. The 8/37 -> 21/37 headline for
+    # RRF->bge did NOT replicate (net +1, McNemar p=1.0 on held-out), so
+    # it is deliberately absent until it earns its place on real data.
+    #
+    # Set in config.yaml as ``search.reranker: rrf`` or via
+    # ``JANUS_SEARCH__RERANKER``. Junk values degrade to ``mmr``.
+    reranker: str = "mmr"
+
+    @field_validator("reranker", mode="before")
+    @classmethod
+    def _coerce_reranker(cls, v: Any) -> Any:
+        """Map aliases to a recipe name; junk becomes ``mmr``, never raises.
+
+        Same reasoning as ``_coerce_cosine_gate_min``: ``JanusSettings`` is
+        a ``BaseSettings``, so a bad env value reaches this field BEFORE any
+        resolver runs, and raising here would take down config loading for
+        the whole process. Failing *closed to the current behaviour* is the
+        only safe direction for a switch that reorders search results.
+        """
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s in _RERANKER_ALIASES:
+                return _RERANKER_ALIASES[s]
+            if s == "":
+                return "mmr"
+            logger.warning(
+                "search.reranker=%r is not a known reranker; using 'mmr' (known: %s)",
+                v,
+                ", ".join(sorted(set(_RERANKER_ALIASES.values()))),
+            )
+            return "mmr"
+        if v is None:
+            return "mmr"
+        logger.warning("search.reranker=%r is not a string; using 'mmr'", v)
+        return "mmr"
+
     # ── Post-hoc TRUE-cosine relevance gate (2026-10-01) ──────────────
     # Defaults to DISABLED (None). When set, ``engine.search_memory``
     # recomputes real cosine similarity between the query vector and each
@@ -740,6 +803,53 @@ def resolve_search_params(cfg: JanusSettings) -> Tuple[float, float]:
     sim = _safe("sim_min_score", sim_raw, cfg.search.sim_min_score, 0.0, 1.0)
     mmr = _safe("mmr_lambda", mmr_raw, cfg.search.mmr_lambda, 0.0, 1.0)
     return sim, mmr
+
+
+def normalize_reranker_name(value: Any) -> str:
+    """Canonicalise a ``SearchConfig.reranker`` spelling to a recipe name.
+
+    Public on purpose: the engine must normalise the value it receives,
+    not assume the field validator already ran. pydantic only runs field
+    validators on assignment when ``validate_assignment=True``, and
+    ``SearchConfig`` does not set it — so ``cfg.search.reranker = "rrf"``
+    stores the raw string. Normalising at the point of use is the only
+    place that is guaranteed to see every path.
+
+    Unknown values are returned AS-IS (not coerced) so the caller can
+    decide how to fail; the engine fails closed to ``mmr``.
+    """
+    if not isinstance(value, str):
+        return ""
+    return _RERANKER_ALIASES.get(value.strip().lower(), value.strip().lower())
+
+
+def resolve_reranker(cfg: JanusSettings) -> str:
+    """Resolve ``search.reranker`` to a recipe name in ``{"mmr", "rrf"}``.
+
+    Unlike the numeric resolvers this one cannot fail, because
+    ``SearchConfig._coerce_reranker`` already normalises the field itself
+    and ``_RERANKER_RECIPES`` in ``engine.search_memory`` always contains
+    the fallback. This function exists so the engine has ONE way to read
+    the choice, and so an env var can override at runtime without a
+    config.yaml edit + restart cycle.
+
+    Env var wins over config.yaml (the house rule for every ``search.*``
+    knob), then config.yaml, then the built-in ``"mmr"`` default.
+    """
+    raw = os.environ.get("JANUS_SEARCH__RERANKER")
+    fallback = cfg.search.reranker
+    if raw is None or raw.strip() == "":
+        return fallback
+    s = raw.strip().lower()
+    if s in _RERANKER_ALIASES:
+        return _RERANKER_ALIASES[s]
+    logger.warning(
+        "search param reranker=%r is not a known reranker; using %s (known: %s)",
+        raw,
+        fallback,
+        ", ".join(sorted(set(_RERANKER_ALIASES.values()))),
+    )
+    return fallback
 
 
 def resolve_reranker_min_score(cfg: JanusSettings) -> float:

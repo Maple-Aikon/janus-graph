@@ -34,7 +34,10 @@ from typing import Any, Dict, List, Optional
 
 from graphiti_core.helpers import normalize_l2
 from graphiti_core.search.search import search as graphiti_search
-from graphiti_core.search.search_config_recipes import EDGE_HYBRID_SEARCH_MMR
+from graphiti_core.search.search_config_recipes import (
+    EDGE_HYBRID_SEARCH_MMR,
+    EDGE_HYBRID_SEARCH_RRF,
+)
 from graphiti_core.search.search_filters import (
     ComparisonOperator,
     DateFilter,
@@ -44,13 +47,24 @@ from graphiti_core.search.search_utils import get_embeddings_for_edges
 
 from ..config import (
     JanusSettings,
+    normalize_reranker_name,
     resolve_cosine_gate_min,
     resolve_cosine_gate_overfetch,
+    resolve_reranker,
     resolve_reranker_min_score,
     resolve_search_params,
 )
 
 logger = logging.getLogger("janus_graph.engine.search_memory")
+
+# Recipe per ``SearchConfig.reranker`` name. Only the two rerankers that
+# actually fused the two retrieval arms are wired up; anything else falls
+# back to MMR (see ``_coerce_reranker``), so this dict must always have a
+# ``"mmr"`` entry.
+_RERANKER_RECIPES = {
+    "mmr": EDGE_HYBRID_SEARCH_MMR,
+    "rrf": EDGE_HYBRID_SEARCH_RRF,
+}
 
 
 async def _apply_cosine_gate(
@@ -179,7 +193,32 @@ async def search_memory(
         # don't bleed state across concurrent calls. ``limit`` may be raised
         # below (cosine gate over-fetch); the caller's limit is restored when
         # truncating the gated result.
-        search_config = copy.deepcopy(EDGE_HYBRID_SEARCH_MMR)
+        #
+        # 2026-10-04: the recipe is no longer hardcoded to MMR. It is
+        # selected by ``cfg.search.reranker`` (see ``_RERANKER_RECIPES``).
+        # Default is still "mmr", so behaviour is unchanged until an
+        # operator opts in.
+        reranker_name = resolve_reranker(cfg)
+        # Normalise HERE, not only in the field validator. pydantic runs
+        # field validators on assignment only when validate_assignment=True
+        # (SearchConfig does not set it), so ``cfg.search.reranker = "rrf"``
+        # -- and a YAML/env value that reached the field as an alias -- must
+        # both be resolved by this lookup rather than trusted raw.
+        reranker_name = normalize_reranker_name(reranker_name)
+        # ``.get`` not ``[]`` on purpose: a name that survived normalisation
+        # but is not a recipe would KeyError the whole search. Fail closed
+        # to today's behaviour.
+        recipe = _RERANKER_RECIPES.get(reranker_name)
+        if recipe is None:
+            logger.warning(
+                "search.reranker=%r is not a known reranker; falling back to 'mmr'",
+                reranker_name,
+            )
+            recipe = _RERANKER_RECIPES["mmr"]
+        search_config = copy.deepcopy(recipe)
+        logger.debug(
+            "search_memory: reranker=%s recipe=%s", reranker_name, type(search_config).__name__
+        )
 
         # v0.4.6: push cfg.search overrides (with fail-soft env validation)
         # down to every per-entity config.

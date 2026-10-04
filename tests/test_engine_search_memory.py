@@ -286,3 +286,105 @@ async def test_engine_facade_error_returns_mcp_wire_shape(base_settings):
     assert "falkordb unreachable" in result["error"]
     assert result["query"] == "test query"
     assert result["group_id"] == base_settings.graphiti.group_id
+
+
+# ---------------------------------------------------------------------------
+# Test E — reranker recipe selection (2026-10-04)
+# ---------------------------------------------------------------------------
+#
+# Before this the recipe was hardcoded to EDGE_HYBRID_SEARCH_MMR at
+# search_memory.py. These tests pin the config-driven selection, and — more
+# importantly — pin the FAIL-CLOSED behaviour: a typo must never reorder or
+# empty search results, it must land on the pre-existing MMR recipe.
+
+
+async def _captured_recipe(monkeypatch, settings):
+    """Run the facade with graphiti_search mocked; return the SearchConfig
+    that was actually handed to graphiti_core."""
+    from janus_graph.engine import search_memory as engine_module
+
+    captured = {}
+
+    async def _fake_search(**kwargs):
+        captured["config"] = kwargs.get("config")
+        return MagicMock(edges=[])
+
+    monkeypatch.setattr(engine_module, "graphiti_search", _fake_search)
+
+    mock_graphiti = MagicMock()
+    mock_graphiti.clients = MagicMock()
+
+    async def _noop(*a, **k):
+        return None
+
+    mock_graphiti.clients.embedder.create = _noop
+
+    result = await search_memory(
+        settings, "reranker selection probe", limit=5, graphiti=mock_graphiti
+    )
+    assert result["success"] is True, result
+    return captured["config"]
+
+
+@pytest.mark.asyncio
+async def test_default_config_keeps_mmr_recipe(monkeypatch):
+    """No config change => byte-identical behaviour to pre-2026-10-04."""
+    settings = JanusSettings()
+    assert settings.search.reranker == "mmr"
+    cfg = await _captured_recipe(monkeypatch, settings)
+    from graphiti_core.search.search_config import EdgeReranker
+
+    assert cfg.edge_config.reranker == EdgeReranker.mmr
+
+
+@pytest.mark.asyncio
+async def test_reranker_rrf_selects_rrf_recipe(monkeypatch):
+    settings = JanusSettings()
+    settings.search.reranker = "rrf"
+    cfg = await _captured_recipe(monkeypatch, settings)
+    from graphiti_core.search.search_config import EdgeReranker
+
+    assert cfg.edge_config.reranker == EdgeReranker.rrf
+
+
+@pytest.mark.asyncio
+async def test_reranker_alias_resolves(monkeypatch):
+    """graphiti's own enum value must work, so an operator copying it from
+    a stack trace gets what they asked for."""
+    settings = JanusSettings()
+    settings.search.reranker = "reciprocal_rank_fusion"
+    cfg = await _captured_recipe(monkeypatch, settings)
+    from graphiti_core.search.search_config import EdgeReranker
+
+    assert cfg.edge_config.reranker == EdgeReranker.rrf
+
+
+@pytest.mark.asyncio
+async def test_unknown_reranker_fails_closed_to_mmr(monkeypatch):
+    """A junk value must NOT raise, and must NOT silently pick a recipe.
+
+    pydantic only runs field validators on assignment when
+    validate_assignment=True (SearchConfig does not set it), so this is the
+    exact path that would have KeyError'd the whole search.
+    """
+    settings = JanusSettings()
+    settings.search.reranker = "definitely-not-a-reranker"
+    cfg = await _captured_recipe(monkeypatch, settings)
+    from graphiti_core.search.search_config import EdgeReranker
+
+    assert cfg.edge_config.reranker == EdgeReranker.mmr
+
+
+@pytest.mark.asyncio
+async def test_reranker_floor_kept_on_config(monkeypatch):
+    """rrf() honours min_score, so the -2.0 floor must still be pushed down.
+
+    rrf() filters ``score >= min_score`` and its scores are
+    1/(rank+1) sums — always positive — so -2.0 never binds, but the
+    floor is also what protects a future non-positive reranker. Guard the
+    plumbing, not the value.
+    """
+    settings = JanusSettings()
+    settings.search.reranker = "rrf"
+    cfg = await _captured_recipe(monkeypatch, settings)
+    assert cfg.reranker_min_score == pytest.approx(-2.0)
