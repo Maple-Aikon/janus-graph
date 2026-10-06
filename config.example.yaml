@@ -21,6 +21,27 @@ graphiti:
     api_key: "sk-litellm-proxy"
     temperature: 0.1
     max_tokens: 4096
+  # Optional: a custom extraction prompt for Graphiti. Forwarded verbatim
+  # to add_episode(custom_extraction_instructions=...) when non-empty, and
+  # omitted entirely when unset (see janus_graph/pipeline/worker.py).
+  #
+  # LEFT COMMENTED ON PURPOSE. config.example.yaml is the LAST fallback of
+  # config._resolve_default_yaml_file(), so an active value here becomes the
+  # effective config for any run without $JANUS_GRAPH_HOME/config.yaml - a dev
+  # at the repo root, or a fresh deployment seeded from this file. Uncomment
+  # to opt in explicitly rather than inherit Maple personal MILD filter by
+  # accident. The block below is his live prompt, kept byte for byte:
+  # (delete the "  # " prefix to enable it)
+  #   custom_extraction_instructions: |-
+  #     The text is a raw technical working transcript of software debugging.
+  #     One rule applies when deciding what is an entity:
+  #     - NEVER extract file paths, directory paths, file names, script names or
+  #       module paths. A name containing a slash '/' or a file extension such as
+  #       .md .py .db .hcl .json .yaml .so .c .rdb is never an entity.
+  #     - If a piece of knowledge is attached to a file, attach it to the system,
+  #       project or person instead, never to the file name.
+  #     Everything else you would normally extract, do extract.
+
   embedding:
     provider: "openai"
     model: "nomic-embed-text-v2"
