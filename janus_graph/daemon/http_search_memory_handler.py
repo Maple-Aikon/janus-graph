@@ -70,11 +70,20 @@ _MAX_LIMIT = 50
 
 # v0.5.0.1 fix #1: bounded timeout around the engine call. Mirrors F6
 # boot-time pattern: same rationale (Falkor disconnect mid-call would
-# otherwise hang the handler forever). 8s cap > measure baseline (warm
-# graphiti_search ~2-4s; hook HTTP_BUDGET_MS=3000); < ratio that would
-# let a single slow recall exhaust aiohttp handler concurrency. TimeoutError
-# maps to 504 SEARCH_TIMEOUT (symmetric with /search/graph endpoint).
-_ENGINE_CALL_TIMEOUT_SEC = 8.0
+# otherwise hang the handler forever). Cap > measure baseline (warm
+# graphiti_search ~2-4s; hook HTTP_BUDGET_MS=3000) and > the long tail
+# measured 2026-10-05 (first request after idle peaked at 7.5 s, i.e. 94%
+# of the old 8 s cap, which is how the 504 bursts happened); still <
+# ratio that would let a single slow recall exhaust aiohttp handler
+# concurrency. TimeoutError maps to 504 SEARCH_TIMEOUT.
+#
+# NOTE: this is NOT the same knob as /search/graph. That route has NO
+# handler-level cap (http_server.py contains zero asyncio.wait_for); its
+# 504 comes from the config-driven BFS budget
+# ``daemon.search_graph.traversal_timeout_sec`` (2.0 s). The 10.0 s in
+# daemon/embedding_client.py:73 is an aiohttp ClientTimeout for the
+# upstream embedder, unrelated to this budget.
+_ENGINE_CALL_TIMEOUT_SEC = 10.0
 
 
 # ─── Rate limit state (F5) ──────────────────────────────────────────────
@@ -272,7 +281,7 @@ async def search_memory_handler(request: web.Request) -> web.Response:
     try:
         # v0.5.0.1 fix #1: bounded engine call. Falkor disconnect after
         # probe OK but before graphiti_search returns → handler would
-        # hang otherwise. 8s cap mirrors F6 boot pattern (timeout=10s).
+        # hang otherwise. 10s cap mirrors F6 boot pattern (timeout=10s).
         # CancelledError: aiohttp auto-cancels on client disconnect; we
         # let it propagate per F8 (test_no_speculative_cancellation_code).
         result = await asyncio.wait_for(
