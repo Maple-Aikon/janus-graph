@@ -97,6 +97,7 @@ class GraphitiConfig(BaseModel):
     group_id: str = "graphiti_memory"
     llm: LLMConfig = Field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    custom_extraction_instructions: str | None = None
 
 
 class DreamConfig(BaseModel):

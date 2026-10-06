@@ -54,6 +54,11 @@ class EpisodeWorker:
         group_id = payload.get("group_id") or self.settings.graphiti.group_id
         name = payload.get("name") or f"ep_{record.id[:8]}"
         source_desc = payload.get("source_description", "agent_interaction")
+        # getattr chain: tests build Settings(report=...) with no graphiti
+        # section at all, so a direct attribute chain raises AttributeError
+        # before add_episode is ever reached.
+        _graphiti = getattr(self.settings, "graphiti", None)
+        custom_instructions = getattr(_graphiti, "custom_extraction_instructions", None)
 
         if not content.strip():
             logger.warning("Episode %s has empty content, skipping.", record.id)
@@ -70,12 +75,20 @@ class EpisodeWorker:
             except Exception:
                 pass
 
+        # L1: only pass the kwarg when configured. Passing it always,
+        # even as None, changes the add_episode call shape and breaks
+        # tests that pin the exact kwargs.
+        ingest_kwargs: dict = {}
+        if custom_instructions:
+            ingest_kwargs["custom_extraction_instructions"] = custom_instructions
+
         await client.add_episode(
             name=name,
             episode_body=content,
             source_description=source_desc,
             reference_time=ref_time,
             group_id=group_id,
+            **ingest_kwargs,
         )
         await self.queue.mark_done(record.id)
         return True
