@@ -106,6 +106,29 @@ class DreamConfig(BaseModel):
     enabled: bool = True
     force_clustering: bool = False
 
+    #: Phase 2 entity-merge threshold: minimum word-token Jaccard between two
+    #: summaries before a merge is allowed. Higher = more conservative.
+    #:
+    #: This value LIVES HERE, not as a literal in the dedup planner. The old
+    #: ``janus_graph.core.contracts.DreamSettings.dedup_threshold`` (0.85) looked
+    #: like the setting but was unreachable — ``dream.py`` receives a
+    #: ``JanusSettings``, whose ``pipeline.dream`` is THIS class, so the contracts
+    #: copy had zero readers while the planner hardcoded 0.80.
+    #:
+    #: Default is 0.80, not the contracts' 0.85. Measured on the 2026-10-07
+    #: snapshot (5,764 entities, 309 duplicate-name clusters): 0.80 plans 2
+    #: merges, 0.85 plans 1, 0.90 plans 0. The merge 0.85 loses is CRG_TOOLS at
+    #: similarity 0.8095, hand-verified as a genuine near-restatement. 0.85 was
+    #: never a measured choice — it was the unreachable copy's value.
+    dedup_threshold: float = 0.80
+
+    #: Phase 1: nodes with degree below this are pinned to their own label
+    #: instead of adopting a neighbour's. Measured on the same snapshot:
+    #: 0 / 2 / 3 / 5 -> 1,296 / 3,225 / 4,134 / 4,891 communities. The community
+    #: count tracks this knob, which is why phase 1 reports the structural floor
+    #: alongside it.
+    cluster_min_degree: int = 3
+
 
 class DlqReplayConfig(BaseModel):
     """Dream Mode phase-4 DLQ replay settings.

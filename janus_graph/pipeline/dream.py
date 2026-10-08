@@ -15,6 +15,7 @@ from ..config import JanusSettings, load_config, resolve_home_relative
 from ..core.contracts import Settings
 from ..report.dispatcher import ReportDispatcher
 from ..report.models import ReportSeverity
+from .dream_phases import cluster_report
 from .queue import EpisodeQueue
 
 logger = logging.getLogger("janus_graph.pipeline.dream")
@@ -69,6 +70,27 @@ def bounded_label_propagation(
     return list(community_cluster_map.values())
 
 
+def _phase1_result(phase1: Dict[str, Any]) -> Any:
+    """Rebuild a ClusterResult from a phase-1 payload, or an empty one.
+
+    ``run_phase1_cluster`` returns the partition as plain dicts so the payload
+    survives JSON serialisation into the dream report. ``cluster_report`` needs
+    the dataclass for ``describe()``.
+    """
+    from .dream_phases import ClusterResult
+
+    data = phase1.get("result")
+    if not isinstance(data, dict):
+        return ClusterResult(
+            nodes=0, communities=0, rounds=0, converged=True,
+            cycle_detected=False, oscillating_nodes=0, pinned_nodes=0,
+            components=0, largest_component=0, largest_community=0,
+            min_degree=0, partition_hash="", oversized=False,
+        )
+    fields = {f for f in ClusterResult.__dataclass_fields__}
+    return ClusterResult(**{k: v for k, v in data.items() if k in fields})
+
+
 async def run_dream_consolidation(
     settings: Optional[Union[JanusSettings, Settings]] = None,
     force: bool = False,
@@ -106,23 +128,111 @@ async def run_dream_consolidation(
         "duration_ms": 0,
     }
 
-    # Phase 0 & 1: Gated Community Clustering
+    # The memory tenant is shared by every phase that reads the graph. Hoisted
+    # ABOVE phase 1: the previous ordering computed it inside phase 2, so a
+    # phase 1 reference to it is a NameError at runtime, not a style nit.
+    dedup_group = group_id or getattr(
+        getattr(cfg, "graphiti", None), "group_id", None
+    ) or "graphiti_memory"
+
+    # Phase 1: Community clustering. Runs a DETERMINISTIC partition: synchronous
+    # label propagation seeded from a lexicographic total order, with 2-cycles
+    # resolved by a fixed smallest-uuid rule. The old `bounded_label_propagation`
+    # was reported as "DONE" while only counting episodes, and the version that
+    # followed refused to run at all; both are replaced by a real measurement
+    # plus the structural floor it must be read against (see dream_phases for
+    # the two falsified hypotheses behind the old diagnosis).
+    cluster_detail = "not attempted: episode count unavailable"
     try:
+        from .dream_apply import run_phase1_cluster
+
         stats = queue.get_stats()
         total_episodes = stats.get("done", 0) + stats.get("queued", 0)
-        if force or total_episodes >= DEFAULT_COMMUNITY_THRESHOLD:
-            results["phase_1_clustering"] = "DONE"
-        else:
-            results["phase_1_clustering"] = "SKIPPED (below threshold)"
-    except Exception as err:
+        phase1 = run_phase1_cluster(cfg, dedup_group)
+        cluster_detail = cluster_report(
+            _phase1_result(phase1), total_episodes, DEFAULT_COMMUNITY_THRESHOLD, force
+        )
+        results["phase_1_clustering"] = cluster_detail
+        results["phase_1_detail"] = phase1
+        results["phase_1_communities"] = phase1.get("communities", 0)
+        logger.info(
+            "dream: phase_1_clustering %s communities=%s",
+            phase1.get("status", "FAILED"),
+            phase1.get("communities", 0),
+        )
+    except Exception as err:  # noqa: BLE001 - clustering failure must not kill the run
         logger.warning("Clustering phase error: %s", err)
-        results["phase_1_clustering"] = f"FAILED: {err}"
+        cluster_detail = "FAILED: %s" % err
+        results["phase_1_clustering"] = cluster_detail
 
-    # Phase 2: Entity Deduplication simulation / execution
-    results["phase_2_deduplication"] = "DONE"
+    # Phase 2: Entity Deduplication. Reads the graph, plans merges, and writes
+    # ONLY when ``force`` is set — the nightly cron run passes force=False, so
+    # it reports what it would do without mutating anything. Previously this
+    # line was the literal ``results["phase_2_deduplication"] = "DONE"`` with no
+    # implementation behind it, which made a no-op indistinguishable from real
+    # work in every dream report since 2026-08-28. ``dedup_group`` is now
+    # resolved once above Phase 1 and shared.
+    try:
+        from .dedup_apply import run_phase2_dedup
 
-    # Phase 3: True Orphan Node Pruning
-    results["phase_3_orphan_pruning"] = "DONE"
+        phase2 = run_phase2_dedup(cfg, dedup_group, force=force)
+        phase2_status = phase2.get("status", "FAILED")
+        # Show the reason too. `detail or reason` dropped ``reason`` whenever
+        # both were present, which is exactly the case that matters: a SKIPPED
+        # phase with a diagnostic reason then reported only its generic detail.
+        detail = " - ".join(
+            x for x in (phase2.get("detail"), phase2.get("reason")) if x
+        )
+        results["phase_2_deduplication"] = "%s (%s)" % (phase2_status, detail)
+        results["phase_2_detail"] = phase2
+        results["phase_2_merges"] = phase2.get("merges", 0)
+        # Real graph size, not the hardcoded 0 this used to report. Taken from
+        # the snapshot Phase 2 already read, so it costs no extra query.
+        seen = phase2.get("entities_seen")
+        if isinstance(seen, int):
+            results["nodes_before"] = seen
+        logger.info(
+            "dream: phase_2_deduplication %s merges=%s applied=%s",
+            phase2_status,
+            phase2.get("merges", 0),
+            phase2.get("applied", False),
+        )
+    except Exception as err:  # noqa: BLE001 - a dedup failure must not kill the run
+        logger.warning("Deduplication phase error: %s", err)
+        results["phase_2_deduplication"] = "FAILED: %s" % err
+
+    # Phase 3: True Orphan Node Pruning. Unreferenced is NOT the same as
+    # disposable: on the 2026-10-07 snapshot all 10 orphans hold 84-251 chars of
+    # summary each, so a name-only "orphan" rule would have deleted knowledge.
+    # The plan deletes only nodes that are unreferenced AND empty, and reports
+    # the rest. Writes only under ``force``. This used to be the literal "DONE".
+    try:
+        from .dream_apply import run_phase3_prune
+
+        phase3 = run_phase3_prune(cfg, dedup_group, force=force)
+        phase3_status = phase3.get("status", "FAILED")
+        detail3 = " - ".join(
+            x for x in (phase3.get("detail"), phase3.get("reason")) if x
+        )
+        results["phase_3_orphan_pruning"] = "%s (%s)" % (phase3_status, detail3)
+        results["phase_3_detail"] = phase3
+        results["phase_3_pruned"] = phase3.get("deleted", 0)
+        # Only moves when a prune actually happened and reported a count.
+        pruned = phase3.get("deleted")
+        if isinstance(pruned, int):
+            results["nodes_after"] = max(
+                0, results.get("nodes_before", 0) - pruned
+            )
+        logger.info(
+            "dream: phase_3_orphan_pruning %s candidates=%s deleted=%s applied=%s",
+            phase3_status,
+            phase3.get("candidates", 0),
+            phase3.get("deleted", 0),
+            phase3.get("applied", False),
+        )
+    except Exception as err:  # noqa: BLE001 - a prune failure must not kill the run
+        logger.warning("Orphan pruning phase error: %s", err)
+        results["phase_3_orphan_pruning"] = "FAILED: %s" % err
 
     # Phase 4: DLQ Auto-repair — requeue failed/aborted (cheap, on episodes table)
     #         + DLQ batch replay (filter by class, on dead_letter table).
@@ -148,7 +258,19 @@ async def run_dream_consolidation(
     except Exception as err:
         results["phase_4_dlq_repair"] = f"FAILED: {err}"
 
-    results["status"] = "completed"
+    # "status" used to be the unconditional literal "completed", so a run in
+    # which every phase threw still reported success. Now it is derived: any
+    # phase that actually failed downgrades the whole run.
+    failed_phases = [
+        k
+        for k in results
+        if k.startswith("phase_") and str(results[k]).startswith("FAILED")
+    ]
+    if failed_phases:
+        results["status"] = "completed_with_failures"
+        results["failed_phases"] = failed_phases
+    else:
+        results["status"] = "completed"
     results["duration_ms"] = round((time.monotonic() - start_time) * 1000, 2)
     results["completed_at"] = datetime.now(timezone.utc).isoformat()
 
