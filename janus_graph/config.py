@@ -122,6 +122,20 @@ class DreamConfig(BaseModel):
     #: never a measured choice — it was the unreachable copy's value.
     dedup_threshold: float = 0.80
 
+    #: Phase 2 must WRITE, not just plan, on the nightly cron.
+    #:
+    #: This is deliberately NOT the ``force`` argument of
+    #: ``run_dream_consolidation``. That flag is passed straight through to
+    #: both phase 2 (dream.py:178) and phase 3 (dream.py:212), so turning it on
+    #: to make dedup real would ALSO enable phase 3, which deletes orphan
+    #: nodes — on the 2026-10-07 snapshot that was 38 nodes. Phase 2 and phase
+    #: 3 destroy different things, so they get different switches.
+    #:
+    #: Default stays False: enabling this makes every nightly run mutate the
+    #: graph irreversibly (there is no undo path — see
+    #: ``dream_entity_undo_log``, which no code writes to).
+    dedup_apply: bool = False
+
     #: Phase 1: nodes with degree below this are pinned to their own label
     #: instead of adopting a neighbour's. Measured on the same snapshot:
     #: 0 / 2 / 3 / 5 -> 1,296 / 3,225 / 4,134 / 4,891 communities. The community

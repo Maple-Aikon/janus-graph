@@ -5,9 +5,10 @@ Kept separate from :mod:`janus_graph.pipeline.dedup` (pure logic) and from
 its own.
 
 Safety rules encoded here:
-  * Nothing is written unless ``apply=True``. ``run_dream_consolidation`` only
-    sets it when ``force=True``, so the nightly cron run can never mutate the
-    graph.
+  * Nothing is written unless ``apply=True``. ``run_dream_consolidation`` sets
+    it when ``force=True`` OR when ``cfg.pipeline.dream.dedup_apply`` is on, so
+    the nightly cron run writes only once an operator opts in per-install.
+    Default is still dry-run.
   * Merges address nodes by ``uuid``, never by name, so a plan computed from one
     snapshot cannot silently re-target a different node if the graph shifts.
   * Redirects CREATE the new edge BEFORE deleting the old one. FalkorDB exposes
@@ -439,6 +440,9 @@ def run_phase2_dedup(cfg: Any, group_id: str, force: bool = False) -> Dict[str, 
     read: ``dream.py`` receives a ``JanusSettings``, whose ``pipeline.dream`` is
     the pydantic ``DreamConfig``, so that field had zero readers while the
     planner used a literal.
+
+    ``force`` is the caller's decision to write. Phase 3 has its own separate
+    gate, so ``force`` here never implies pruning (see ``dream.py``).
     """
     from .dedup import plan_dedup
 

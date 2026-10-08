@@ -135,6 +135,20 @@ async def run_dream_consolidation(
         getattr(cfg, "graphiti", None), "group_id", None
     ) or "graphiti_memory"
 
+    # Phase 2's own write switch. Read from ``cfg.pipeline.dream.dedup_apply``
+    # with the same defensive getattr chain the threshold and min-degree
+    # resolvers use, so a bare ``contracts.Settings`` (no ``pipeline.dream``)
+    # still yields False instead of raising. Absent means False — dry-run —
+    # which is the behaviour that shipped until now.
+    dedup_apply = bool(
+        getattr(
+            getattr(getattr(cfg, "pipeline", None), "dream", None),
+            "dedup_apply",
+            False,
+        )
+    )
+    results["phase_2_apply"] = dedup_apply
+
     # Phase 1: Community clustering. Runs a DETERMINISTIC partition: synchronous
     # label propagation seeded from a lexicographic total order, with 2-cycles
     # resolved by a fixed smallest-uuid rule. The old `bounded_label_propagation`
@@ -172,10 +186,14 @@ async def run_dream_consolidation(
     # implementation behind it, which made a no-op indistinguishable from real
     # work in every dream report since 2026-08-28. ``dedup_group`` is now
     # resolved once above Phase 1 and shared.
+    #
+    # ``force`` is NOT reused here. It reaches phase 3 as well (below), so
+    # using it to make dedup write would also enable orphan pruning — 38 nodes
+    # on the 2026-10-07 snapshot. ``dedup_apply`` is phase 2's own switch.
     try:
         from .dedup_apply import run_phase2_dedup
 
-        phase2 = run_phase2_dedup(cfg, dedup_group, force=force)
+        phase2 = run_phase2_dedup(cfg, dedup_group, force=force or dedup_apply)
         phase2_status = phase2.get("status", "FAILED")
         # Show the reason too. `detail or reason` dropped ``reason`` whenever
         # both were present, which is exactly the case that matters: a SKIPPED
