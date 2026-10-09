@@ -29,6 +29,36 @@ class QueueSettings:
 
 @dataclass(frozen=True)
 class DreamSettings:
+    """SHADOW of :class:`janus_graph.config.DreamConfig` — NOT the live setting.
+
+    Kept only as a type placeholder for ``PipelineSettings.dream``. Nothing in
+    ``janus_graph/`` reads any of these fields: an AST sweep for both access
+    forms (``ast.Attribute`` and ``getattr(..., "field")``) over the package
+    found exactly two readers of ANY dream field, and neither is this class —
+    ``pipeline/dedup_apply.py`` reads ``cluster_min_degree`` and
+    ``dedup_threshold``, ``pipeline/dream.py`` reads ``dedup_apply``; all three
+    resolve through ``cfg.pipeline.dream`` on a ``JanusSettings`` (pydantic), not
+    through this dataclass.
+
+    The shadow is a live hazard: ``dedup_threshold`` is 0.85 here and 0.80 in
+    ``DreamConfig``, and 0.80 is the measured value. Editing this dataclass to
+    "tune Dream Mode" changes nothing at all.
+
+    Why it is kept rather than deleted or aliased to ``DreamConfig``:
+
+    * Deleted -- it is a public import of the frozen Phase-0.5 interface, and
+      ``tests/test_contracts.py`` imports the name.
+    * Aliased -- ``DreamConfig`` is a pydantic ``BaseModel``, not a dataclass,
+      so swapping it in would make ``settings.pipeline.dream.dedup_threshold =
+      0.5`` succeed and break the immutability guarantee this module exists to
+      freeze. It would also pull pydantic in behind a deliberately dependency-
+      light contract module.
+
+    So the shape stays frozen and the values stay inert, and
+    ``tests/test_contracts.py::test_dream_shadow_is_not_the_live_setting`` pins
+    the divergence so the next person cannot mistake one for the other.
+    """
+
     enabled: bool = True
     cron_schedule: str = "30 2 * * *"
     timeout_sec: int = 600
