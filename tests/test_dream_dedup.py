@@ -402,10 +402,20 @@ def test_apply_order_is_create_before_delete_for_mentions():
     victim = plan.merges[0].victim_uuid
 
     def rows_for(cypher):
-        if "RETURN e.uuid, e.src_uuid, v.uuid" in cypher:
+        # 2026-10-09: MENTIONS has no src_uuid/dst_uuid properties (measured on
+        # all 26,030 live edges), so endpoints come from the matched nodes and
+        # the read is `s.uuid, v.uuid`. The fake below must match the query the
+        # code actually issues, otherwise it silently returns no rows and the
+        # test fails for a reason unrelated to statement ordering.
+        if "RETURN e.uuid, s.uuid, v.uuid" in cypher:
             return [["edge-1", "ep1", victim, "2026-10-01", "graphiti_memory"]]
         if "RETURN e.uuid, a.uuid, b.uuid" in cypher:
             return []  # no RELATES_TO touching the victim
+        if "CREATE" in cypher and "RETURN count(*)" in cypher:
+            # The MENTIONS redirect CREATE reports how many rows it matched so
+            # the writer only DELETEs the old edge when the new one really
+            # exists. Answering with a positive count is the "it worked" case.
+            return [[1]]
         if "RETURN count(v)" in cypher:
             return [[0]]
         if "RETURN sum(size(ids) - 1)" in cypher:

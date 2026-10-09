@@ -27,16 +27,26 @@ in a graph the relationship's endpoints are the *edge itself*, and ``src_uuid``
 / ``dst_uuid`` are ordinary properties that merely mirror them. Rewriting the
 property leaves the edge still attached to the victim node, and the next node
 deletion detaches it -- silently dropping every MENTIONS the merge was supposed
-to preserve. Measured on the 2026-10-07 snapshot: all 24,950 MENTIONS have
-``src_uuid`` pointing at an Episodic and ``dst_uuid`` at an Entity, i.e. the
-properties do mirror the topology, which is exactly why the mistake is
-invisible until data goes missing.
+to preserve.
 
-So the redirect is: read the edge, DELETE it, re-CREATE it with the survivor
-endpoint. Measured proof that this is required: RELATES_TO carries both
-``source_node_uuid``/``target_node_uuid`` and ``src_uuid``/``dst_uuid`` and on
+MEASURED 2026-10-09 on the live graph (26,030 MENTIONS), correcting an earlier
+claim in this docstring: MENTIONS carries ONLY ``uuid``, ``group_id`` and
+``created_at``. It has NO ``src_uuid``/``dst_uuid`` properties at all, so the
+"properties mirror the topology" premise above is false for MENTIONS. Reading
+those two names returns NULL on every row, which silently turned Phase A into a
+no-op -- the CREATE matched ``(:Episodic {uuid: NULL})`` and matched nothing --
+while ``mentions_moved`` still went up. The victim then kept its MENTIONS, so
+Phase D's ``NOT (v)--()`` guard correctly refused to delete it, and the phase
+never converged. MENTIONS endpoints must be read from the matched NODES.
+
+So the redirect is: read the edge endpoints, DELETE it, re-CREATE it with the
+survivor endpoint. Measured proof that writing both spellings is required for
+RELATES_TO (and only for RELATES_TO): it carries both
+``source_node_uuid``/``target_node_uuid`` and ``src_uuid``/``dst_uuid``, and on
 all 12,295 edges the two spellings agree (0 disagree, 0 missing), so both must
-be written to keep the record self-consistent.
+be written to keep that record self-consistent. MENTIONS must NOT be given
+invented properties -- a property that never existed is exactly what made this
+bug invisible for two nightly runs.
 """
 
 from __future__ import annotations
@@ -55,8 +65,8 @@ _ENTITIES_Q = (
     "RETURN n.uuid, n.name, n.summary, n.created_at"
 )
 _MENTIONS_Q = (
-    "MATCH (:Episodic)-[e:MENTIONS]->(n:Entity) WHERE n.group_id = $gid "
-    "RETURN e.uuid, e.src_uuid, e.dst_uuid, e.created_at, e.group_id"
+    "MATCH (s:Episodic)-[e:MENTIONS]->(n:Entity) WHERE n.group_id = $gid "
+    "RETURN e.uuid, s.uuid, n.uuid, e.created_at, e.group_id"
 )
 _RELATIONS_Q = (
     "MATCH (a:Entity)-[e:RELATES_TO]->(b:Entity) "
@@ -217,9 +227,9 @@ def apply_plan(
     try:
         ment_rows = _records(
             graph,
-            "MATCH (:Episodic)-[e:MENTIONS]->(v:Entity) "
+            "MATCH (s:Episodic)-[e:MENTIONS]->(v:Entity) "
             "WHERE v.uuid IN $victims "
-            "RETURN e.uuid, e.src_uuid, v.uuid, e.created_at, e.group_id",
+            "RETURN e.uuid, s.uuid, v.uuid, e.created_at, e.group_id",
             {"victims": victims},
         )
     except Exception as exc:  # noqa: BLE001
@@ -228,17 +238,45 @@ def apply_plan(
 
     moved = 0
     for edge_uuid, src_uuid, dst_uuid, created_at, gid in ment_rows:
-        new_dst = root.get(str(dst_uuid), str(dst_uuid))
-        if new_dst == str(dst_uuid):
+        # Endpoints come from the MATCHED NODES, not from edge properties:
+        # MENTIONS carries only uuid/group_id/created_at (measured on all
+        # 26,030 live edges), so `e.src_uuid` reads NULL and the CREATE below
+        # would match `(:Episodic {uuid: NULL})` -- which matches nothing.
+        src_uuid, dst_uuid = str(src_uuid or ""), str(dst_uuid or "")
+        if not src_uuid or not dst_uuid:
+            counters["errors"].append(
+                "mentions-skip %s: unresolved endpoint" % edge_uuid
+            )
+            continue
+        new_dst = root.get(dst_uuid, dst_uuid)
+        if new_dst == dst_uuid:
             continue
         try:
             # CREATE first, DELETE second. FalkorDB has no transaction, so the
             # reverse order could destroy the edge if this process died between
             # the two statements.
-            graph.query(
-                "MATCH (:Episodic {uuid: $src}), (:Entity {uuid: $new}) "
+            #
+            # The DELETE is conditional on the CREATE having actually matched
+            # both endpoints. Until the endpoint fix landed, the CREATE could
+            # never match (`{uuid: NULL}` matches nothing), so this guard was
+            # untestable; now that it CAN match, running DELETE regardless would
+            # destroy the MENTIONS outright when the MATCH hits 0 rows -- the
+            # exact data loss DELETE+CREATE exists to prevent.
+            created = _records(
+                graph,
+                # The MATCH endpoints MUST be named. An anonymous node in the
+                # MATCH pattern (``(:Episodic {uuid: $src})``) is a separate
+                # pattern part with no binding, so ``CREATE (s)-[e]->(t)``
+                # builds BRAND NEW unlabelled nodes instead of attaching the
+                # edge to the matched ones. The edge then exists -- count(*)
+                # returns 1, so the guard below passes -- while the MENTIONS
+                # points at two empty placeholders and is unreachable by
+                # ``(s:Episodic)-[:MENTIONS]->(t:Entity)``. Measured on the live
+                # graph: 2 moved edges landed on 4 empty unlabelled nodes.
+                "MATCH (s:Episodic {uuid: $src}), (t:Entity {uuid: $new}) "
                 "CREATE (s)-[e:MENTIONS {uuid: $eu, group_id: $gid, "
-                "src_uuid: $src, dst_uuid: $new, created_at: $ca}]->(t)",
+                "created_at: $ca}]->(t) "
+                "RETURN count(*)",
                 {
                     "src": src_uuid,
                     "new": new_dst,
@@ -247,6 +285,13 @@ def apply_plan(
                     "ca": str(created_at) if created_at else None,
                 },
             )
+            n_created = int(created[0][0]) if created and created[0][0] else 0
+            if n_created <= 0:
+                counters["errors"].append(
+                    "mentions-create %s: endpoints did not match, edge kept"
+                    % edge_uuid
+                )
+                continue
             graph.query(
                 "MATCH (:Episodic {uuid: $src})-[e:MENTIONS]->(:Entity {uuid: $old}) "
                 "WHERE e.uuid = $eu DELETE e",
@@ -304,9 +349,12 @@ def apply_plan(
         try:
             # CREATE first, DELETE second — see the module docstring.
             graph.query(
-                "MATCH (:Entity {uuid: $s2}), (:Entity {uuid: $d2}) "
+                # Named endpoints for the same reason as Phase A: an anonymous
+                # MATCH node leaves (s)/(t) unbound and CREATE would attach the
+                # new RELATES_TO to fresh unlabelled placeholders.
+                "MATCH (s:Entity {uuid: $s2}), (t:Entity {uuid: $d2}) "
                 "CREATE (s)-[e:RELATES_TO {uuid: $eu, source_node_uuid: $s2, "
-                "target_node_uuid: $d2, src_uuid: $s2, dst_uuid: $d2, "
+                "target_node_uuid: $d2, "
                 "group_id: $gid, fact: $fact, name: $name, created_at: $ca, "
                 "valid_at: $va, reference_time: $rt, episodes: $eps}]->(t)",
                 {
