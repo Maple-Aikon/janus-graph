@@ -90,9 +90,7 @@ def test_unreferenced_with_text_is_protected_not_prunable():
     assert len(plan.candidates) == 1
     assert plan.protected == 1
     assert plan.prunable == []
-    assert plan.protected_chars == len(
-        "No stable diffusion references found."
-    )
+    assert plan.protected_chars == len("No stable diffusion references found.")
     assert "holds" in plan.candidates[0].reason
 
 
@@ -173,9 +171,19 @@ def _cluster_result(**over):
     from janus_graph.pipeline.dream_phases import ClusterResult
 
     base = dict(
-        nodes=10, communities=3, rounds=2, converged=True, cycle_detected=False,
-        oscillating_nodes=0, pinned_nodes=0, components=4, largest_component=6,
-        largest_community=5, min_degree=3, partition_hash="abc123", oversized=False,
+        nodes=10,
+        communities=3,
+        rounds=2,
+        converged=True,
+        cycle_detected=False,
+        oscillating_nodes=0,
+        pinned_nodes=0,
+        components=4,
+        largest_component=6,
+        largest_community=5,
+        min_degree=3,
+        partition_hash="abc123",
+        oversized=False,
     )
     base.update(over)
     return ClusterResult(**base)
@@ -236,8 +244,7 @@ def test_cluster_report_flags_an_oversized_community():
 def test_cluster_report_surfaces_a_non_converged_cycle():
     from janus_graph.pipeline.dream_phases import cluster_report
 
-    res = _cluster_result(converged=False, cycle_detected=True,
-                          oscillating_nodes=23)
+    res = _cluster_result(converged=False, cycle_detected=True, oscillating_nodes=23)
     line = cluster_report(res, 80, 50, force=False)
     assert "2-cycle on 23 nodes" in line
     assert "did not converge" in line
@@ -273,10 +280,10 @@ def test_cluster_graph_is_identical_under_node_reordering():
     by_length = sorted(adj, key=lambda x: (len(x), x))
     rotations = list(adj)
     orderings = [
-        rotations[1:] + rotations[:1],      # rotate by one
-        sorted(adj, reverse=True),         # reverse lexicographic
-        by_length,                         # by (degree, name)
-        sorted(adj),                       # plain sorted
+        rotations[1:] + rotations[:1],  # rotate by one
+        sorted(adj, reverse=True),  # reverse lexicographic
+        by_length,  # by (degree, name)
+        sorted(adj),  # plain sorted
     ]
     for keys in orderings:
         shuffled = {k: adj[k] for k in keys}
@@ -313,12 +320,12 @@ def test_cluster_graph_resolves_the_bipartite_two_cycle():
     # largest_component.
     adj = _adj(a="b", c="d")
     res = cluster_graph(adj, min_degree=0)
-    assert res.nodes == 4                  # two disjoint edges
+    assert res.nodes == 4  # two disjoint edges
     assert res.components == 2
     assert res.cycle_detected is True
     assert res.converged is False
     assert res.oscillating_nodes == 4
-    assert res.communities == 2              # one per component, measured
+    assert res.communities == 2  # one per component, measured
     assert res.largest_community == 2
     assert res.oversized is False
     # min_degree MUST match on both sides: the default is 3, which pins all
@@ -333,8 +340,7 @@ def test_partition_hash_ignores_label_numbering():
     """Two identical partitions numbered differently are the same partition."""
     from janus_graph.pipeline.dream_phases import partition_hash
 
-    assert partition_hash({"a": 0, "b": 0, "c": 1}) == \
-        partition_hash({"a": 7, "b": 7, "c": 99})
+    assert partition_hash({"a": 0, "b": 0, "c": 1}) == partition_hash({"a": 7, "b": 7, "c": 99})
     assert partition_hash({"a": 0, "b": 1}) != partition_hash({"a": 0, "b": 0})
 
 
@@ -346,7 +352,7 @@ def test_cluster_graph_reports_the_structural_floor():
     adj = _adj(a="bcde", b="c", c="d", d="e", f="")
     res = cluster_graph(adj, min_degree=0)
     assert res.nodes == 6
-    assert res.components == 2            # the a-b-c-d-e chain, plus isolated f
+    assert res.components == 2  # the a-b-c-d-e chain, plus isolated f
     assert res.largest_component == 5
     assert res.oversized is False
 
@@ -365,8 +371,7 @@ def test_community_count_moves_with_min_degree():
     from janus_graph.pipeline.dream_phases import cluster_graph
 
     adj = _adj(a="bcde", b="cd", c="d", d="e", f="")
-    counts = {cluster_graph(adj, min_degree=m).communities
-              for m in (0, 2, 3, 5)}
+    counts = {cluster_graph(adj, min_degree=m).communities for m in (0, 2, 3, 5)}
     assert len(counts) > 1
 
 
@@ -385,12 +390,14 @@ def test_build_adjacency_drops_edges_to_unknown_nodes():
     from janus_graph.pipeline.dream_phases import build_adjacency
 
     ents = [{"uuid": "a"}, {"uuid": "b"}]
-    rels = [{"src_uuid": "a", "dst_uuid": "b"},
-            {"src_uuid": "a", "dst_uuid": "ghost"},
-            {"src_uuid": "a", "dst_uuid": "a"}]
+    rels = [
+        {"src_uuid": "a", "dst_uuid": "b"},
+        {"src_uuid": "a", "dst_uuid": "ghost"},
+        {"src_uuid": "a", "dst_uuid": "a"},
+    ]
     adj = build_adjacency(ents, rels)
     assert set(adj) == {"a", "b"}
-    assert adj["a"] == {"b"}          # self-loop dropped, ghost dropped
+    assert adj["a"] == {"b"}  # self-loop dropped, ghost dropped
 
 
 def test_connected_components_are_sorted_and_largest_first():
@@ -409,8 +416,6 @@ def test_count_low_degree_matches_the_pinned_count():
     for md in (0, 2, 3, 5, 10):
         res = cluster_graph(adj, min_degree=md)
         assert res.pinned_nodes == count_low_degree(adj, md), md
-
-
 
 
 # ------------------------------------------------------- phase 3 execution
@@ -452,9 +457,7 @@ class FakeGraph:
             for u in uuids:
                 if u in self.live:
                     continue
-                self.entities = [
-                    e for e in self.entities if str(e.get("uuid")) != u
-                ]
+                self.entities = [e for e in self.entities if str(e.get("uuid")) != u]
                 self.deleted.append(u)
             return FakeResult([])
         if "RETURN count" in cypher:
@@ -465,8 +468,7 @@ class FakeGraph:
                 n = sum(
                     1
                     for u in uuids
-                    if u in self.live
-                    or any(str(e.get("uuid")) == u for e in self.entities)
+                    if u in self.live or any(str(e.get("uuid")) == u for e in self.entities)
                 )
             return FakeResult([[n]])
         return FakeResult([])
@@ -640,8 +642,13 @@ def test_tie_break_prefers_the_smallest_label():
     # Rank order is lexicographic, so in {"a": .., "b": .., "x": .., "y": ..}
     # the seeds are a=0, b=1, x=2, y=3. Node "m" sits between a/b and x/y and
     # ends up tied; assert the resulting GROUP is the one with the lower rank.
-    adj = {"a": {"b", "m"}, "b": {"a", "m"}, "x": {"y", "m"},
-           "y": {"x", "m"}, "m": {"a", "b", "x", "y"}}
+    adj = {
+        "a": {"b", "m"},
+        "b": {"a", "m"},
+        "x": {"y", "m"},
+        "y": {"x", "m"},
+        "m": {"a", "b", "x", "y"},
+    }
     res = cluster_graph(adj, min_degree=0)
     # Deterministic AND equal to the explicit smallest-label result computed by
     # hand: m joins whichever pair won, and that pair is the smaller-ranked one.
@@ -661,8 +668,14 @@ def test_sync_update_differs_from_async_in_place():
     # extra edge. Earlier "obvious" fixtures (a path, two disjoint edges) were
     # re-measured after each code fix and stopped diverging, so the fixture is
     # re-derived rather than trusted.
-    adj = {"a": {"b", "c", "d", "e", "f"}, "b": {"a", "c"},
-           "c": {"a", "b"}, "d": {"a"}, "e": {"a"}, "f": {"a"}}
+    adj = {
+        "a": {"b", "c", "d", "e", "f"},
+        "b": {"a", "c"},
+        "c": {"a", "b"},
+        "d": {"a"},
+        "e": {"a"},
+        "f": {"a"},
+    }
     sync = cluster_graph(adj, min_degree=0)
 
     # Emulate the async/in-place schedule: apply each new label immediately, so
@@ -677,9 +690,10 @@ def test_sync_update_differs_from_async_in_place():
             for nb in adj[node]:
                 if nb in labels:
                     tally[labels[nb]] = tally.get(labels[nb], 0) + 1
-            new[node] = (min(tally.items(), key=lambda kv: (-kv[1], kv[0]))[0]
-                         if tally else labels[node])
-            labels[node] = new[node]        # in place: leaks forward
+            new[node] = (
+                min(tally.items(), key=lambda kv: (-kv[1], kv[0]))[0] if tally else labels[node]
+            )
+            labels[node] = new[node]  # in place: leaks forward
     async_result = partition_hash(labels)
 
     assert sync.partition_hash != async_result, (
@@ -702,8 +716,7 @@ def test_cycle_resolution_collapses_onto_one_label():
     labels = dict(before)
     # One component: every oscillator adopts the smallest uuid's label, which
     # is a fixed point of the 2-cycle.
-    _resolve_cycle(labels, ["a", "b", "c", "d"],
-                   {"a": 0, "b": 0, "c": 0, "d": 0})
+    _resolve_cycle(labels, ["a", "b", "c", "d"], {"a": 0, "b": 0, "c": 0, "d": 0})
     assert labels == {"a": 4, "b": 4, "c": 4, "d": 4}, (
         "every oscillator in a component must adopt the smallest uuid's label; "
         "an unchanged mapping means _resolve_cycle is a no-op again"
@@ -713,8 +726,7 @@ def test_cycle_resolution_collapses_onto_one_label():
     # regression for collapsing the whole oscillating set at once, which turned
     # three disjoint 2-node chains into one 6-node community.
     scoped = {"a": 4, "b": 9, "c": 7, "d": 1}
-    _resolve_cycle(scoped, ["a", "b", "c", "d"],
-                   {"a": 0, "b": 0, "c": 1, "d": 1})
+    _resolve_cycle(scoped, ["a", "b", "c", "d"], {"a": 0, "b": 0, "c": 1, "d": 1})
     assert scoped == {"a": 4, "b": 4, "c": 7, "d": 7}, (
         "resolution must stay inside one connected component"
     )
@@ -743,13 +755,9 @@ def test_partition_hash_separates_group_boundaries():
     assert partition_hash({"a": 0, "b": 1}) != partition_hash({"a": 0, "b": 0})
     # The shape that actually collided before the fix: a single group whose
     # members span the same separator run as two separate groups.
-    assert partition_hash({"x": 0, "y": 1, "z": 2}) != partition_hash(
-        {"x": 0, "z": 0, "y": 1}
-    )
+    assert partition_hash({"x": 0, "y": 1, "z": 2}) != partition_hash({"x": 0, "z": 0, "y": 1})
     # And a member that is itself a separator character must not break it.
-    assert partition_hash({"a": 0, chr(31): 1}) != partition_hash(
-        {"a": 0, chr(31): 0}
-    )
+    assert partition_hash({"a": 0, chr(31): 1}) != partition_hash({"a": 0, chr(31): 0})
 
 
 def test_oversized_flag_is_computed_from_the_graph():
@@ -794,6 +802,7 @@ def test_empty_snapshot_never_reports_done():
     assert line.startswith("SKIPPED")
     assert "DONE" not in line
 
+
 def test_partition_is_invariant_to_how_the_caller_spells_the_graph():
     """REGRESSION for the worst bug of this work.
 
@@ -836,6 +845,7 @@ def test_cluster_graph_accepts_a_node_listed_only_as_a_neighbour():
     res = cluster_graph({"a": {"b"}}, min_degree=0)
     assert res.nodes == 2
 
+
 def test_tie_break_resolves_toward_the_smallest_label():
     """M1 survived twice: no test pinned the tie-break DIRECTION.
 
@@ -868,8 +878,9 @@ def test_tie_break_resolves_toward_the_smallest_label():
                 tally = {}
                 for nb in graph[node]:
                     tally[labels[nb]] = tally.get(labels[nb], 0) + 1
-                new[node] = (max(tally.items(), key=lambda kv: (kv[1], -kv[0]))[0]
-                             if tally else labels[node])
+                new[node] = (
+                    max(tally.items(), key=lambda kv: (kv[1], -kv[0]))[0] if tally else labels[node]
+                )
             labels = new
             part = frozenset(labels.items())
             if part in seen:
@@ -894,17 +905,14 @@ def test_cycle_resolution_uses_the_smallest_uuid_not_the_first():
     # Pass the oscillators in DESCENDING order. Grouping sorts them, so the
     # keeper must still be "w" (label 6) -- not "z", the first one seen.
     labels = {"z": 9, "y": 8, "x": 7, "w": 6}
-    _resolve_cycle(labels, ["z", "y", "x", "w"],
-                   {"z": 0, "y": 0, "x": 0, "w": 0})
+    _resolve_cycle(labels, ["z", "y", "x", "w"], {"z": 0, "y": 0, "x": 0, "w": 0})
     assert labels == {"z": 6, "y": 6, "x": 6, "w": 6}, (
-        "the keeper must be the smallest uuid (w, label 6), not the first seen "
-        "(z, label 9)"
+        "the keeper must be the smallest uuid (w, label 6), not the first seen (z, label 9)"
     )
 
     # Same set, ascending order: the result must be identical.
     labels2 = {"z": 9, "y": 8, "x": 7, "w": 6}
-    _resolve_cycle(labels2, ["w", "x", "y", "z"],
-                   {"z": 0, "y": 0, "x": 0, "w": 0})
+    _resolve_cycle(labels2, ["w", "x", "y", "z"], {"z": 0, "y": 0, "x": 0, "w": 0})
     assert labels2 == labels
 
 
@@ -939,8 +947,7 @@ def test_oversized_is_true_only_when_a_community_beats_its_component():
 
     graphs = [
         {"a": {"b"}, "b": {"a"}, "c": {"d"}, "d": {"c"}},
-        {"a": {"b"}, "b": {"a"}, "c": {"d"}, "d": {"c"},
-         "e": {"f"}, "f": {"e"}},
+        {"a": {"b"}, "b": {"a"}, "c": {"d"}, "d": {"c"}, "e": {"f"}, "f": {"e"}},
         {"hub": {"l%d" % i for i in range(6)}},
     ]
     for g in graphs:
@@ -1027,10 +1034,14 @@ def test_oversized_is_a_live_guard_against_cross_component_merges(monkeypatch):
     # them together spans all 8 nodes.
     def two_oscillating_components():
         return {
-            "n0": {"n2", "n3"}, "n1": {"n2", "n3"},
-            "n2": {"n0", "n1", "n3"}, "n3": {"n0", "n1", "n2"},
-            "n4": {"n6", "n7"}, "n5": {"n6", "n7"},
-            "n6": {"n4", "n5"}, "n7": {"n4", "n5"},
+            "n0": {"n2", "n3"},
+            "n1": {"n2", "n3"},
+            "n2": {"n0", "n1", "n3"},
+            "n3": {"n0", "n1", "n2"},
+            "n4": {"n6", "n7"},
+            "n5": {"n6", "n7"},
+            "n6": {"n4", "n5"},
+            "n7": {"n4", "n5"},
         }
 
     correct = dp.cluster_graph(two_oscillating_components(), min_degree=2)

@@ -175,15 +175,20 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
 
     elif cmd == "sweep":
         print("🔄 Starting cron sweep...")
-        res = asyncio.run(run_cron_sweep(cfg, batch_size=args.batch_size))
-        summary_text = f"Sweep completed: {res.get('succeeded', 0)}/{res.get('processed', 0)} ok, {res.get('failed', 0)} fail, {res.get('queued_remaining', 0)} left ({res.get('duration_ms', 0)}ms)"
+        # `res` was already bound to a bool by the engine start/stop branches
+        # above, so reusing it for a dict result was an implicit redefinition
+        # (mypy caught it). Distinct names, same behaviour.
+        sweep_result = asyncio.run(run_cron_sweep(cfg, batch_size=args.batch_size))
+        summary_text = f"Sweep completed: {sweep_result.get('succeeded', 0)}/{sweep_result.get('processed', 0)} ok, {sweep_result.get('failed', 0)} fail, {sweep_result.get('queued_remaining', 0)} left ({sweep_result.get('duration_ms', 0)}ms)"
         print(summary_text)
         return 0
 
     elif cmd == "dream":
         print(f"🌙 Starting dream consolidation (force={args.force})...")
-        res = asyncio.run(run_dream_consolidation(cfg, force=args.force, group_id=args.group_id))
-        summary_text = f"Dream consolidation completed: {res.get('status', 'ok')} ({res.get('duration_ms', 0)}ms)"
+        dream_result = asyncio.run(
+            run_dream_consolidation(cfg, force=args.force, group_id=args.group_id)
+        )
+        summary_text = f"Dream consolidation completed: {dream_result.get('status', 'ok')} ({dream_result.get('duration_ms', 0)}ms)"
         print(summary_text)
         return 0
 
@@ -269,7 +274,10 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
                 summary="Janus-Graph CLI Telegram test message",
                 details={"sender": "cli", "status": "ok"},
             )
-            asyncio.run(dispatcher.dispatch(report))
+            # `dispatch` never existed on ReportDispatcher (only `emit` /
+            # `emit_quick`), so both report test-* actions raised AttributeError
+            # and nothing covered them. Caught by mypy 2026-10-10.
+            asyncio.run(dispatcher.emit(report))
             print("✅ Dispatched test alert to Telegram sink.")
             return 0
         elif action == "test-webhook":
@@ -280,7 +288,8 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
                 summary="Janus-Graph CLI Webhook test event",
                 details={"sender": "cli", "event": "ping"},
             )
-            asyncio.run(dispatcher.dispatch(report))
+            # Same fix as test-telegram above: `dispatch` -> `emit`.
+            asyncio.run(dispatcher.emit(report))
             print("✅ Dispatched test event to Webhook sink.")
             return 0
 
@@ -311,8 +320,8 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
         target_dir = args.target_data_dir or str(Path(cfg.pipeline.queue_db_path).parent)
         print(f"⏪ Restoring snapshot from {args.snapshot_dir} into {target_dir}...")
         try:
-            res = rollback_database(args.snapshot_dir, target_dir)
-            print(f"✅ Rollback restored successfully: {res['restored_db']}")
+            rollback_result = rollback_database(args.snapshot_dir, target_dir)
+            print(f"✅ Rollback restored successfully: {rollback_result['restored_db']}")
             return 0
         except Exception as e:
             print(f"❌ Rollback failed: {e}")

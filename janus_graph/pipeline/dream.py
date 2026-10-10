@@ -82,10 +82,19 @@ def _phase1_result(phase1: Dict[str, Any]) -> Any:
     data = phase1.get("result")
     if not isinstance(data, dict):
         return ClusterResult(
-            nodes=0, communities=0, rounds=0, converged=True,
-            cycle_detected=False, oscillating_nodes=0, pinned_nodes=0,
-            components=0, largest_component=0, largest_community=0,
-            min_degree=0, partition_hash="", oversized=False,
+            nodes=0,
+            communities=0,
+            rounds=0,
+            converged=True,
+            cycle_detected=False,
+            oscillating_nodes=0,
+            pinned_nodes=0,
+            components=0,
+            largest_component=0,
+            largest_community=0,
+            min_degree=0,
+            partition_hash="",
+            oversized=False,
         )
     fields = {f for f in ClusterResult.__dataclass_fields__}
     return ClusterResult(**{k: v for k, v in data.items() if k in fields})
@@ -104,7 +113,12 @@ async def run_dream_consolidation(
     # bare contracts.Settings and opened <cwd>/data/queue.db. Anchor at home.
     pipeline_path = getattr(cfg.pipeline, "queue_db_path", None)
     if pipeline_path is None:
-        pipeline_path = getattr(cfg.paths, "queue_db_path", None)
+        # getattr() guards only the attribute *inside* it — `cfg.paths` is
+        # evaluated first, and JanusSettings has no `paths`, so the unguarded
+        # form raised AttributeError exactly when it was needed. Same defect
+        # class as cron.py:74; fixed there 2026-10-10, missed here.
+        paths_cfg = getattr(cfg, "paths", None)
+        pipeline_path = getattr(paths_cfg, "queue_db_path", None)
     if pipeline_path is None:
         pipeline_path = "./data/queue.db"
     db_path = resolve_home_relative(str(pipeline_path))
@@ -131,9 +145,9 @@ async def run_dream_consolidation(
     # The memory tenant is shared by every phase that reads the graph. Hoisted
     # ABOVE phase 1: the previous ordering computed it inside phase 2, so a
     # phase 1 reference to it is a NameError at runtime, not a style nit.
-    dedup_group = group_id or getattr(
-        getattr(cfg, "graphiti", None), "group_id", None
-    ) or "graphiti_memory"
+    dedup_group = (
+        group_id or getattr(getattr(cfg, "graphiti", None), "group_id", None) or "graphiti_memory"
+    )
 
     # Phase 2's own write switch. Read from ``cfg.pipeline.dream.dedup_apply``
     # with the same defensive getattr chain the threshold and min-degree
@@ -198,9 +212,7 @@ async def run_dream_consolidation(
         # Show the reason too. `detail or reason` dropped ``reason`` whenever
         # both were present, which is exactly the case that matters: a SKIPPED
         # phase with a diagnostic reason then reported only its generic detail.
-        detail = " - ".join(
-            x for x in (phase2.get("detail"), phase2.get("reason")) if x
-        )
+        detail = " - ".join(x for x in (phase2.get("detail"), phase2.get("reason")) if x)
         results["phase_2_deduplication"] = "%s (%s)" % (phase2_status, detail)
         results["phase_2_detail"] = phase2
         results["phase_2_merges"] = phase2.get("merges", 0)
@@ -229,18 +241,14 @@ async def run_dream_consolidation(
 
         phase3 = run_phase3_prune(cfg, dedup_group, force=force)
         phase3_status = phase3.get("status", "FAILED")
-        detail3 = " - ".join(
-            x for x in (phase3.get("detail"), phase3.get("reason")) if x
-        )
+        detail3 = " - ".join(x for x in (phase3.get("detail"), phase3.get("reason")) if x)
         results["phase_3_orphan_pruning"] = "%s (%s)" % (phase3_status, detail3)
         results["phase_3_detail"] = phase3
         results["phase_3_pruned"] = phase3.get("deleted", 0)
         # Only moves when a prune actually happened and reported a count.
         pruned = phase3.get("deleted")
         if isinstance(pruned, int):
-            results["nodes_after"] = max(
-                0, results.get("nodes_before", 0) - pruned
-            )
+            results["nodes_after"] = max(0, results.get("nodes_before", 0) - pruned)
         logger.info(
             "dream: phase_3_orphan_pruning %s candidates=%s deleted=%s applied=%s",
             phase3_status,
@@ -280,9 +288,7 @@ async def run_dream_consolidation(
     # which every phase threw still reported success. Now it is derived: any
     # phase that actually failed downgrades the whole run.
     failed_phases = [
-        k
-        for k in results
-        if k.startswith("phase_") and str(results[k]).startswith("FAILED")
+        k for k in results if k.startswith("phase_") and str(results[k]).startswith("FAILED")
     ]
     if failed_phases:
         results["status"] = "completed_with_failures"

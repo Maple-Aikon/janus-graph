@@ -365,7 +365,7 @@ class EpisodeQueue:
         """Find processing records older than timeout and requeue or abort."""
         now = _iso_now()
 
-        def _sync_reap():
+        def _sync_reap_stuck():
             with self._get_connection() as conn:
                 cur = conn.execute(
                     """
@@ -421,13 +421,13 @@ class EpisodeQueue:
                 return reaped_count
 
         async with self._write_lock:
-            return await asyncio.to_thread(_sync_reap)
+            return await asyncio.to_thread(_sync_reap_stuck)
 
     async def reap_failed_or_aborted(self, limit: int = 500) -> int:
         """Requeue failed/aborted records back to queued for manual or cron retry."""
         now = _iso_now()
 
-        def _sync_reap():
+        def _sync_reap_failed():
             with self._get_connection() as conn:
                 cur = conn.execute(
                     """
@@ -449,7 +449,7 @@ class EpisodeQueue:
                 return len(ids)
 
         async with self._write_lock:
-            return await asyncio.to_thread(_sync_reap)
+            return await asyncio.to_thread(_sync_reap_failed)
 
     async def replay_dlq_episode(self, episode_id: str) -> bool:
         """Replay a single DLQ episode."""

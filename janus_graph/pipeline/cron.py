@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
 
-from ..config import JanusSettings, load_config, resolve_home_relative
+from ..config import JanusSettings, PipelineConfig, load_config, resolve_home_relative
 from ..core.contracts import Settings
 from ..report.dispatcher import ReportDispatcher
 from ..report.models import ReportSeverity
@@ -34,34 +34,48 @@ async def run_cron_sweep(
 ) -> Dict[str, Any]:
     """Execute a full reaper + worker sweep over pending queue records."""
     cfg = settings or load_config()
+    # contracts.Settings carries `pipeline: PipelineSettings`, whose field set
+    # is {queue, dream, heuristics_active} -- it has NO drain_batch_size,
+    # worker_concurrency, attempt_timeout_sec or queue_db_path. Measured
+    # 2026-10-10: with a contracts.Settings and batch_size=None this used to
+    # raise AttributeError at cfg.pipeline.drain_batch_size.
+    # contracts.Settings is still accepted by the signature (tests build one),
+    # so read those four through getattr instead of a direct attribute chain.
+    # NOTE: `or DEFAULT` is NOT a safe rewrite -- a legal value of 0 would be
+    # swallowed into the default (attempt_timeout_sec=0 means "no timeout").
+    pipeline_cfg = getattr(cfg, "pipeline", None)
     actual_batch_size = (
-        batch_size if (batch_size is not None and batch_size > 0) else cfg.pipeline.drain_batch_size
+        batch_size
+        if (batch_size is not None and batch_size > 0)
+        else getattr(pipeline_cfg, "drain_batch_size", None)
     )
+    if actual_batch_size is None:
+        # Read the declared default instead of hardcoding a number here: the
+        # class default is 50 but the live config.yaml pins 20, and any literal
+        # in this function would silently drift from both.
+        actual_batch_size = PipelineConfig.model_fields["drain_batch_size"].default
     actual_concurrency = (
-        getattr(cfg.pipeline, "worker_concurrency", None)
+        getattr(pipeline_cfg, "worker_concurrency", None)
         if concurrency == WORKER_CONCURRENCY
         else concurrency
     ) or WORKER_CONCURRENCY
+    # NB the trailing `or WORKER_CONCURRENCY` is kept EXACTLY as it was, and it
+    # still spans both ternary branches. Replacing it with an `is None` test
+    # would let an explicit concurrency=0 through to asyncio.Semaphore(0),
+    # which never releases -- a behaviour change dressed as a cleanup.
+    attempt_timeout = getattr(pipeline_cfg, "attempt_timeout_sec", None)
     actual_record_timeout = (
-        float(getattr(cfg.pipeline, "attempt_timeout_sec", None))
-        if (
-            record_timeout_sec == PER_RECORD_TIMEOUT_SECONDS
-            and hasattr(cfg.pipeline, "attempt_timeout_sec")
-        )
+        float(attempt_timeout)
+        if (record_timeout_sec == PER_RECORD_TIMEOUT_SECONDS and attempt_timeout is not None)
         else record_timeout_sec
     )
     actual_sweep_timeout = (
-        float(getattr(cfg.pipeline, "attempt_timeout_sec", None))
-        if (
-            sweep_timeout_sec == SWEEP_TIMEOUT_SECONDS
-            and hasattr(cfg.pipeline, "attempt_timeout_sec")
-        )
+        float(attempt_timeout)
+        if (sweep_timeout_sec == SWEEP_TIMEOUT_SECONDS and attempt_timeout is not None)
         else sweep_timeout_sec
     )
     actual_reap_timeout = (
-        int(getattr(cfg.pipeline, "attempt_timeout_sec", None))
-        if hasattr(cfg.pipeline, "attempt_timeout_sec")
-        else PROCESSING_TIMEOUT_SECONDS
+        int(attempt_timeout) if attempt_timeout is not None else PROCESSING_TIMEOUT_SECONDS
     )
     # Same hasattr guard as dream.py: contracts.Settings keeps the path
     # under ``paths``. Measured 2026-10-02: a bare contracts.Settings raises
@@ -69,9 +83,17 @@ async def run_cron_sweep(
     # one, so that path is unreachable *today* -- this is defence-in-depth for
     # the day contracts.PipelineSettings grows drain_batch_size, and the
     # branch must not become cwd-relative when it does.
-    pipeline_path = getattr(cfg.pipeline, "queue_db_path", None)
+    #
+    # `cfg.paths` must be read through getattr on the SETTINGS too: a
+    # JanusSettings has no ``paths`` at all, and `getattr(cfg.paths, ...)`
+    # evaluates ``cfg.paths`` eagerly, so the old spelling raised
+    # AttributeError here instead of falling back. Measured 2026-10-10 with a
+    # live JanusSettings: the AttributeError fires the moment the branch is
+    # taken, i.e. the "defence" would have been the crash.
+    pipeline_path = getattr(pipeline_cfg, "queue_db_path", None)
     if pipeline_path is None:
-        pipeline_path = getattr(cfg.paths, "queue_db_path", None)
+        paths_cfg = getattr(cfg, "paths", None)
+        pipeline_path = getattr(paths_cfg, "queue_db_path", None)
     if pipeline_path is None:
         pipeline_path = "./data/queue.db"
     db_path = resolve_home_relative(str(pipeline_path))

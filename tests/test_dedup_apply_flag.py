@@ -82,9 +82,7 @@ def _settings(tmp_path, name, dream=None):
     so both shapes work — this test pins the contracts-side shape because that
     is the one a bare ``Settings()`` actually produces.
     """
-    settings = Settings(
-        report=ReportSettings(sinks=("file",), file_path=Path(tmp_path / name))
-    )
+    settings = Settings(report=ReportSettings(sinks=("file",), file_path=Path(tmp_path / name)))
     if dream is not None:
         settings = dataclasses.replace(
             settings,
@@ -102,14 +100,15 @@ async def test_dedup_apply_flag_makes_phase2_write(tmp_path):
     """Flag ON must reach apply_plan — a plan nobody executes is the bug."""
     settings = _settings(tmp_path, "p2_on.jsonl", dream=DreamConfig(dedup_apply=True))
     queue = _queue(tmp_path, "p2_on.db")
-    with patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue), patch(
-        "janus_graph.pipeline.dedup_apply.run_phase2_dedup", return_value=P2_DONE
-    ) as p2, patch(
-        "janus_graph.pipeline.dream_apply.run_phase1_cluster",
-        return_value={"status": "DONE", "communities": 1},
-    ), patch(
-        "janus_graph.pipeline.dream_apply.run_phase3_prune", return_value=P3_PLANNED
-    ) as p3:
+    with (
+        patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue),
+        patch("janus_graph.pipeline.dedup_apply.run_phase2_dedup", return_value=P2_DONE) as p2,
+        patch(
+            "janus_graph.pipeline.dream_apply.run_phase1_cluster",
+            return_value={"status": "DONE", "communities": 1},
+        ),
+        patch("janus_graph.pipeline.dream_apply.run_phase3_prune", return_value=P3_PLANNED) as p3,
+    ):
         results = await run_dream_consolidation(settings=settings)
 
     assert p2.call_args.kwargs["force"] is True
@@ -128,13 +127,14 @@ async def test_dedup_apply_defaults_to_dry_run(tmp_path):
     """
     settings = _settings(tmp_path, "p2_off.jsonl", dream=DreamConfig())
     queue = _queue(tmp_path, "p2_off.db")
-    with patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue), patch(
-        "janus_graph.pipeline.dedup_apply.run_phase2_dedup", return_value=P2_DRY
-    ) as p2, patch(
-        "janus_graph.pipeline.dream_apply.run_phase1_cluster",
-        return_value={"status": "DONE", "communities": 1},
-    ), patch(
-        "janus_graph.pipeline.dream_apply.run_phase3_prune", return_value=P3_PLANNED
+    with (
+        patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue),
+        patch("janus_graph.pipeline.dedup_apply.run_phase2_dedup", return_value=P2_DRY) as p2,
+        patch(
+            "janus_graph.pipeline.dream_apply.run_phase1_cluster",
+            return_value={"status": "DONE", "communities": 1},
+        ),
+        patch("janus_graph.pipeline.dream_apply.run_phase3_prune", return_value=P3_PLANNED),
     ):
         results = await run_dream_consolidation(settings=settings)
 
@@ -155,13 +155,14 @@ async def test_missing_dream_config_is_dry_run_not_crash(tmp_path):
         report=ReportSettings(sinks=("file",), file_path=Path(tmp_path / "bare.jsonl"))
     )
     queue = _queue(tmp_path, "bare.db")
-    with patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue), patch(
-        "janus_graph.pipeline.dedup_apply.run_phase2_dedup", return_value=P2_DRY
-    ) as p2, patch(
-        "janus_graph.pipeline.dream_apply.run_phase1_cluster",
-        return_value={"status": "DONE", "communities": 1},
-    ), patch(
-        "janus_graph.pipeline.dream_apply.run_phase3_prune", return_value=P3_PLANNED
+    with (
+        patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue),
+        patch("janus_graph.pipeline.dedup_apply.run_phase2_dedup", return_value=P2_DRY) as p2,
+        patch(
+            "janus_graph.pipeline.dream_apply.run_phase1_cluster",
+            return_value={"status": "DONE", "communities": 1},
+        ),
+        patch("janus_graph.pipeline.dream_apply.run_phase3_prune", return_value=P3_PLANNED),
     ):
         results = await run_dream_consolidation(settings=settings)
 
@@ -178,14 +179,15 @@ async def test_dedup_apply_does_not_enable_phase3_pruning(tmp_path):
     """
     settings = _settings(tmp_path, "p2_safe.jsonl", dream=DreamConfig(dedup_apply=True))
     queue = _queue(tmp_path, "p2_safe.db")
-    with patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue), patch(
-        "janus_graph.pipeline.dedup_apply.run_phase2_dedup", return_value=P2_DONE
-    ), patch(
-        "janus_graph.pipeline.dream_apply.run_phase1_cluster",
-        return_value={"status": "DONE", "communities": 1},
-    ), patch(
-        "janus_graph.pipeline.dream_apply.run_phase3_prune", return_value=P3_PLANNED
-    ) as p3:
+    with (
+        patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue),
+        patch("janus_graph.pipeline.dedup_apply.run_phase2_dedup", return_value=P2_DONE),
+        patch(
+            "janus_graph.pipeline.dream_apply.run_phase1_cluster",
+            return_value={"status": "DONE", "communities": 1},
+        ),
+        patch("janus_graph.pipeline.dream_apply.run_phase3_prune", return_value=P3_PLANNED) as p3,
+    ):
         results = await run_dream_consolidation(settings=settings)
 
     assert p3.call_args.kwargs["force"] is False
@@ -199,15 +201,18 @@ async def test_force_still_enables_both_phases(tmp_path):
     """force=True keeps its old meaning: the explicit, whole-run override."""
     settings = _settings(tmp_path, "force.jsonl", dream=DreamConfig())
     queue = _queue(tmp_path, "force.db")
-    with patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue), patch(
-        "janus_graph.pipeline.dedup_apply.run_phase2_dedup", return_value=P2_DONE
-    ) as p2, patch(
-        "janus_graph.pipeline.dream_apply.run_phase1_cluster",
-        return_value={"status": "DONE", "communities": 1},
-    ), patch(
-        "janus_graph.pipeline.dream_apply.run_phase3_prune",
-        return_value={"status": "DONE", "deleted": 38, "applied": True},
-    ) as p3:
+    with (
+        patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue),
+        patch("janus_graph.pipeline.dedup_apply.run_phase2_dedup", return_value=P2_DONE) as p2,
+        patch(
+            "janus_graph.pipeline.dream_apply.run_phase1_cluster",
+            return_value={"status": "DONE", "communities": 1},
+        ),
+        patch(
+            "janus_graph.pipeline.dream_apply.run_phase3_prune",
+            return_value={"status": "DONE", "deleted": 38, "applied": True},
+        ) as p3,
+    ):
         results = await run_dream_consolidation(settings=settings, force=True)
 
     assert p2.call_args.kwargs["force"] is True

@@ -291,22 +291,23 @@ def plan_dedup(
         if new_src == new_dst:
             plan.relations_to_drop += 1
             continue
-        key = (new_src, new_dst, str(rel.get("fact") or ""))
-        if key in seen_rel:
+        # Distinct name: `key` was already bound to a 2-tuple by the MENTIONS
+        # loop above. At runtime it was the same variable being reused
+        # (correct, but easy to misread); separate names make the two key
+        # shapes obvious.
+        rel_key = (new_src, new_dst, str(rel.get("fact") or ""))
+        if rel_key in seen_rel:
             plan.relations_to_drop += 1
             continue
-        seen_rel.add(key)
+        seen_rel.add(rel_key)
 
     plan.mentions_to_redirect = sum(
-        1
-        for men in mentions
-        if str(men.get("dst_uuid") or "") in redirect
+        1 for men in mentions if str(men.get("dst_uuid") or "") in redirect
     )
     plan.relations_to_redirect = sum(
         1
         for rel in relations
-        if str(rel.get("src_uuid") or "") in redirect
-        or str(rel.get("dst_uuid") or "") in redirect
+        if str(rel.get("src_uuid") or "") in redirect or str(rel.get("dst_uuid") or "") in redirect
     )
 
     # Counter-semantics correction (2026-10-07, measured on the snapshot).
@@ -359,8 +360,7 @@ def plan_dedup(
 
     def _rel_touched(rel):
         return (
-            str(rel.get("src_uuid") or "") in redirect
-            or str(rel.get("dst_uuid") or "") in redirect
+            str(rel.get("src_uuid") or "") in redirect or str(rel.get("dst_uuid") or "") in redirect
         )
 
     self_loops = 0

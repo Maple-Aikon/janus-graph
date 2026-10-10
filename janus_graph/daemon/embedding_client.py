@@ -112,8 +112,10 @@ class EmbeddingClient:
                 miss_index.append(idx)
 
         if not miss_texts:
-            return [r if r is not None else EmbeddingResult(t, None, "not_cached")
-                    for r, t in zip(results, texts)]
+            return [
+                r if r is not None else EmbeddingResult(t, None, "not_cached")
+                for r, t in zip(results, texts)
+            ]
 
         async with self._semaphore:
             url = f"{self._settings.embedding_base_url.rstrip('/')}/embeddings"
@@ -134,13 +136,17 @@ class EmbeddingClient:
                         body = await resp.text()
                         err = f"http_{resp.status}: {body[:200]}"
                         logger.warning("embed failed: %s", err)
-                        return [r if r is not None else EmbeddingResult(t, None, err)
-                                for r, t in zip(results, texts)]
+                        return [
+                            r if r is not None else EmbeddingResult(t, None, err)
+                            for r, t in zip(results, texts)
+                        ]
                     data = await resp.json()
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning("embed transport error: %s", e)
-                return [r if r is not None else EmbeddingResult(t, None, str(e))
-                        for r, t in zip(results, texts)]
+                return [
+                    r if r is not None else EmbeddingResult(t, None, str(e))
+                    for r, t in zip(results, texts)
+                ]
 
         # Normalize response: {"data": [{"embedding": [...]}, ...]}
         # Positions align with ``miss_texts`` (the batch we actually sent),
@@ -160,5 +166,7 @@ class EmbeddingClient:
             else:
                 results[idx] = EmbeddingResult(text, None, "missing_embedding_in_response")
 
-        return [r if r is not None else EmbeddingResult(t, None, "not_cached")
-                for r, t in zip(results, texts)]
+        return [
+            r if r is not None else EmbeddingResult(t, None, "not_cached")
+            for r, t in zip(results, texts)
+        ]

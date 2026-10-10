@@ -76,9 +76,12 @@ def _normalize_extracted_entity(entity: Any) -> Dict[str, Any]:
 
     out = dict(entity)
     raw_type_id = out.get("entity_type_id")
-    if "entity_type_id" not in out or isinstance(raw_type_id, bool):
+    if "entity_type_id" not in out or raw_type_id is None or isinstance(raw_type_id, bool):
         # bool is a subclass of int, so int(True) would silently classify the
         # entity as type 1. A boolean is never a real entity_type_id.
+        # `raw_type_id is None` is listed explicitly rather than being left to
+        # the except below: int(None) raises TypeError, so the fallback value
+        # is the same 0, but spelling it out keeps mypy's narrowing honest.
         out["entity_type_id"] = 0
     elif not isinstance(raw_type_id, int):
         try:

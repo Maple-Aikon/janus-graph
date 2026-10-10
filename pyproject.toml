@@ -141,47 +141,41 @@ ignore_missing_imports = true
 # !! tests/test_falkordb_restart_policy.py (verified failing on the old code).
 # !!
 # !! Do NOT re-add this module to silence a new error — it is gated again.
-
-[[tool.mypy.overrides]]
-module = "janus_graph.cli.main"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "janus_graph.pipeline.cron"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "janus_graph.pipeline.dream_apply"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "janus_graph.pipeline.worker"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "janus_graph.engine.search_memory"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "janus_graph.daemon.search_engine"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "janus_graph.pipeline.dream"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "janus_graph.pipeline.dedup"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "janus_graph.heuristics.vendor_patches.falkor_edge_search"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "janus_graph.heuristics.rules.extracted_entities"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "janus_graph.daemon.http_server"
-ignore_errors = true
+# !!
+# !! janus_graph.pipeline.cron + janus_graph.pipeline.worker were removed from
+# !! this list the same day (7 errors: cron 38/46/54/62/74, worker 54/69).
+# !! TWO of those were live crashes, not type noise:
+# !!
+# !!   1. cron.py:46/54/62 — `float(getattr(cfg.pipeline,
+# !!      "attempt_timeout_sec", None))` was guarded by `hasattr`, but
+# !!      hasattr is True whenever the attribute EXISTS, even when its value
+# !!      is None. pydantic accepts a post-hoc
+# !!      `cfg.pipeline.attempt_timeout_sec = None` (validate_assignment is
+# !!      unset), so the guard passed and float(None) raised TypeError inside
+# !!      run_cron_sweep — an unhandled crash of the whole sweep, not a
+# !!      per-episode failure. Reproduced 2026-10-10 on both the post-hoc
+# !!      assignment and model_construct paths.
+# !!
+# !!   2. cron.py:74 — `getattr(cfg.paths, "queue_db_path", None)`. The getattr
+# !!      guards the INNER attribute only; `cfg.paths` is evaluated eagerly and
+# !!      JanusSettings has no `paths` field at all, so the "defence-in-depth"
+# !!      fallback raised AttributeError instead of falling back. It was
+# !!      unreachable today only because line 72 already returns a path for
+# !!      every JanusSettings.
+# !!
+# !! Both now read through getattr with an explicit `is not None` test, so a
+# !! missing OR None value falls back instead of crashing. Regression tests in
+# !! tests/test_cron_settings_union.py (verified failing on the old code).
+# !!
+# !! The other three were type-only — proven unreachable, not assumed:
+# !! cron.py:38 needs a contracts.Settings AND batch_size=None (every
+# !! production caller passes a JanusSettings; tests pin batch_size=5);
+# !! worker.py:54's settings.graphiti fallback is dead because BOTH payload
+# !! writers (queue.enqueue and daemon/episode_queue_adapter) always write
+# !! group_id; worker.py:69 needs a contracts.Settings reaching an UNPATCHED
+# !! create_graphiti_instance, which no caller does. Those two use `cast`, an
+# !! identity function at runtime, so the AttributeError each would raise —
+# !! and should_retry's classification of it (AttributeError → retry,
+# !! measured) — is unchanged.
+# !!
+# !! Do NOT re-add these modules to silence a new error — they are gated again.

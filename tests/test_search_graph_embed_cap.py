@@ -216,8 +216,9 @@ async def test_untrimmed_rows_do_not_force_degraded():
 
     engine._cypher_bfs = _fake_bfs
 
-    resp = await engine.search({"seed_entities": ["seed"], "max_hops": 2,
-                                "min_cosine": 0.0, "mmr_lambda": 1.0, "limit": 5})
+    resp = await engine.search(
+        {"seed_entities": ["seed"], "max_hops": 2, "min_cosine": 0.0, "mmr_lambda": 1.0, "limit": 5}
+    )
     assert isinstance(resp, SearchResponse)
     assert resp.degraded is False, "a fully scored batch must not be degraded"
     assert len(embedder.batches[0]) == 6, "5 facts + 1 query"
@@ -229,18 +230,22 @@ async def test_untrimmed_rows_do_not_force_degraded():
 
     engine._cypher_bfs = _big_bfs
     embedder.batches.clear()
-    resp2 = await engine.search({"seed_entities": ["seed"], "max_hops": 2,
-                                 "min_cosine": 0.0, "mmr_lambda": 1.0, "limit": 5})
+    resp2 = await engine.search(
+        {"seed_entities": ["seed"], "max_hops": 2, "min_cosine": 0.0, "mmr_lambda": 1.0, "limit": 5}
+    )
     # Pass 1 already embedded facts 0-4 AND the query "seed" (6 texts).
     # Pass 2 reuses all six from cache and sends only the 5 new facts --
     # the query itself is cached too, which is why it is absent below.
-    assert embedder.batches[0] == ["fact number %d" % i for i in range(5, 10)], \
+    assert embedder.batches[0] == ["fact number %d" % i for i in range(5, 10)], (
         "only the uncached in-cap facts cross the wire; the query is cached"
-    assert all(len(b) <= 11 for b in embedder.batches), \
+    )
+    assert all(len(b) <= 11 for b in embedder.batches), (
         "no single upstream call may exceed the cap + query"
+    )
     assert embedder.cache_stats.hits == 6, "5 facts + the query were reused"
-    assert any("embed_max_facts" in w for w in resp2.warnings), \
+    assert any("embed_max_facts" in w for w in resp2.warnings), (
         "the skip must be disclosed as a warning, not hidden"
+    )
     assert resp2.count > 0, "the scored prefix must still return results"
 
     # THE decisive assertion, and the reason this test exists. Judging
@@ -297,8 +302,9 @@ async def test_genuine_embed_failure_still_degrades():
 
     engine._cypher_bfs = _bfs
 
-    resp = await engine.search({"seed_entities": ["seed"], "max_hops": 2,
-                                "min_cosine": 0.0, "mmr_lambda": 1.0, "limit": 5})
+    resp = await engine.search(
+        {"seed_entities": ["seed"], "max_hops": 2, "min_cosine": 0.0, "mmr_lambda": 1.0, "limit": 5}
+    )
     assert resp.degraded is True, "a 500 from the embedder IS a degradation"
     assert resp.count == 0, "no row can be scored without a cosine"
 
@@ -371,9 +377,7 @@ async def test_failures_are_not_cached():
     def _empty(texts: List[str]) -> Dict[str, Any]:
         return {"data": []}
 
-    embedder = RecordingEmbedder(
-        DaemonSearchGraphSettings(embed_cache_size=100), respond=_empty
-    )
+    embedder = RecordingEmbedder(DaemonSearchGraphSettings(embed_cache_size=100), respond=_empty)
     first = await embedder.embed(["flaky"])
     assert first[0].embedding is None
 
@@ -425,7 +429,7 @@ async def test_http_error_keeps_cache_hits_intact():
 async def test_lru_eviction_respects_max_size():
     """The cache honours its configured bound instead of growing forever."""
     embedder = RecordingEmbedder(DaemonSearchGraphSettings(embed_cache_size=2))
-    await embedder.embed(["a", "b", "c"])       # 3 texts, capacity 2
+    await embedder.embed(["a", "b", "c"])  # 3 texts, capacity 2
     assert embedder._cache.size() == 2
 
     embedder.batches.clear()

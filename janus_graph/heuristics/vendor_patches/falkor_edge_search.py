@@ -238,9 +238,13 @@ def apply_falkor_edge_search_patch() -> PatchedVendorState:
     state = PatchedVendorState()
 
     try:
-        from graphiti_core import __version__ as _v
+        # graphiti-core 0.30.1 defines no `__version__`, so this import raised
+        # on every single run and the except below silently pinned
+        # state.version to "" forever (summary() then logged `version=?`).
+        # Package metadata is the authoritative source and actually exists.
+        import importlib.metadata as _md
 
-        state.version = _v
+        state.version = _md.version("graphiti-core")
     except Exception:  # noqa: BLE001
         state.version = ""
 

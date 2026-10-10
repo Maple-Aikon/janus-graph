@@ -61,8 +61,7 @@ logger = logging.getLogger("janus_graph.pipeline.dedup_apply")
 DEFAULT_BATCH = 200
 
 _ENTITIES_Q = (
-    "MATCH (n:Entity) WHERE n.group_id = $gid "
-    "RETURN n.uuid, n.name, n.summary, n.created_at"
+    "MATCH (n:Entity) WHERE n.group_id = $gid RETURN n.uuid, n.name, n.summary, n.created_at"
 )
 _MENTIONS_Q = (
     "MATCH (s:Episodic)-[e:MENTIONS]->(n:Entity) WHERE n.group_id = $gid "
@@ -244,9 +243,7 @@ def apply_plan(
         # would match `(:Episodic {uuid: NULL})` -- which matches nothing.
         src_uuid, dst_uuid = str(src_uuid or ""), str(dst_uuid or "")
         if not src_uuid or not dst_uuid:
-            counters["errors"].append(
-                "mentions-skip %s: unresolved endpoint" % edge_uuid
-            )
+            counters["errors"].append("mentions-skip %s: unresolved endpoint" % edge_uuid)
             continue
         new_dst = root.get(dst_uuid, dst_uuid)
         if new_dst == dst_uuid:
@@ -288,8 +285,7 @@ def apply_plan(
             n_created = int(created[0][0]) if created and created[0][0] else 0
             if n_created <= 0:
                 counters["errors"].append(
-                    "mentions-create %s: endpoints did not match, edge kept"
-                    % edge_uuid
+                    "mentions-create %s: endpoints did not match, edge kept" % edge_uuid
                 )
                 continue
             graph.query(
@@ -410,19 +406,16 @@ def apply_plan(
     # ---- Phase D: LAST, delete the now-emptied victim nodes ----
     deleted = 0
     for start in range(0, len(victims), batch):
-        chunk = victims[start:start + batch]
+        chunk = victims[start : start + batch]
         try:
             res = _records(
                 graph,
-                "MATCH (v:Entity) WHERE v.uuid IN $victims "
-                "AND NOT (v)--() "
-                "RETURN count(v)",
+                "MATCH (v:Entity) WHERE v.uuid IN $victims AND NOT (v)--() RETURN count(v)",
                 {"victims": chunk},
             )
             n_before = int(res[0][0]) if res and res[0][0] is not None else 0
             graph.query(
-                "MATCH (v:Entity) WHERE v.uuid IN $victims AND NOT (v)--() "
-                "DETACH DELETE v",
+                "MATCH (v:Entity) WHERE v.uuid IN $victims AND NOT (v)--() DETACH DELETE v",
                 {"victims": chunk},
             )
             deleted += n_before
@@ -431,6 +424,7 @@ def apply_plan(
     counters["nodes_deleted"] = deleted
 
     return counters
+
 
 def _dedup_threshold(cfg: Any) -> float:
     """Resolve the Phase 2 merge threshold from the live config.
@@ -447,8 +441,7 @@ def _dedup_threshold(cfg: Any) -> float:
     """
     from ..config import DreamConfig
 
-    raw = getattr(getattr(getattr(cfg, "pipeline", None), "dream", None),
-                  "dedup_threshold", None)
+    raw = getattr(getattr(getattr(cfg, "pipeline", None), "dream", None), "dedup_threshold", None)
     if raw is None:
         raw = getattr(cfg, "dream", None)
         raw = getattr(raw, "dedup_threshold", None)
@@ -467,8 +460,9 @@ def _cluster_min_degree(cfg: Any) -> int:
     """Resolve the Phase 1 low-degree pin threshold from the live config."""
     from ..config import DreamConfig
 
-    raw = getattr(getattr(getattr(cfg, "pipeline", None), "dream", None),
-                  "cluster_min_degree", None)
+    raw = getattr(
+        getattr(getattr(cfg, "pipeline", None), "dream", None), "cluster_min_degree", None
+    )
     if raw is None:
         raw = getattr(getattr(cfg, "dream", None), "cluster_min_degree", None)
     if raw is None:

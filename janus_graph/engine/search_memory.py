@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from graphiti_core.helpers import normalize_l2
 from graphiti_core.search.search import search as graphiti_search
@@ -138,7 +138,11 @@ async def _apply_cosine_gate(
     kept: List[Any] = []
     unscorable = 0
     for edge in edges:
-        vec = embeddings.get(getattr(edge, "uuid", None))
+        # An edge with no `uuid` cannot be scored. `dict.get` would return None
+        # for such a key anyway, so testing the key first is the same answer —
+        # it just stops mypy from claiming a None can index a Dict[str, ...].
+        edge_uuid = getattr(edge, "uuid", None)
+        vec = embeddings.get(edge_uuid) if isinstance(edge_uuid, str) else None
         if vec is None or len(vec) == 0:
             unscorable += 1
             continue
@@ -283,7 +287,12 @@ async def search_memory(
             query_vector=query_vector,
         )
 
-        edges = getattr(search_results, "edges", search_results) or []
+        # `graphiti_search` is annotated `-> SearchResults`, but the pinned
+        # vendor build can hand back a bare list of edges, which is why this
+        # getattr falls through to `search_results` itself. `cast` is an
+        # identity function at runtime, so this documents the union without
+        # changing which value reaches the gate.
+        edges = cast(List[Any], getattr(search_results, "edges", search_results) or [])
 
         if gate_min is not None:
             edges = await _apply_cosine_gate(

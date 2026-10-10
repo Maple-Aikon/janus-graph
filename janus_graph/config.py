@@ -297,11 +297,21 @@ class PipeSinkConfig(BaseModel):
 
 
 class WebhookSinkConfig(BaseModel):
+    """Webhook report sink.
+
+    ``min_severity`` was documented in ``config.example.yaml`` (and in the
+    deployed config.yaml) but the field did not exist here, so pydantic
+    dropped the key without warning and ``dispatcher``'s ``getattr`` fallback
+    silently substituted the report-level default. Default is "info" to match
+    the Telegram and Pipe sinks.
+    """
+
     enabled: bool = False
     url: str = ""
     secret_header: str = "X-Janus-Signature"
     secret_token: str = ""
     timeout_sec: int = 5
+    min_severity: str = "info"
 
 
 class ReportSinksConfig(BaseModel):

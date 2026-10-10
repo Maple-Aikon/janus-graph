@@ -59,16 +59,12 @@ def _count_or_zero(res: Any) -> int:
 #: different outcomes and collapsing them silently hides a race.
 _EXISTS_COUNT = "MATCH (v:Entity) WHERE v.uuid IN $u RETURN count(v)"
 
-_STILL_ORPHAN_COUNT = (
-    "MATCH (v:Entity) WHERE v.uuid IN $u AND NOT (v)--() RETURN count(v)"
-)
+_STILL_ORPHAN_COUNT = "MATCH (v:Entity) WHERE v.uuid IN $u AND NOT (v)--() RETURN count(v)"
 
 #: Same gate. Phase D of dedup_apply uses this exact shape, so it is known to
 #: parse and run on this FalkorDB; DETACH only ever sees an already-edgeless
 #: node, so it cannot silently discard an edge.
-_DELETE_ORPHANS = (
-    "MATCH (v:Entity) WHERE v.uuid IN $u AND NOT (v)--() DETACH DELETE v"
-)
+_DELETE_ORPHANS = "MATCH (v:Entity) WHERE v.uuid IN $u AND NOT (v)--() DETACH DELETE v"
 
 
 def _delete_orphans(graph: Any, uuids: List[str]) -> Dict[str, Any]:
@@ -77,7 +73,10 @@ def _delete_orphans(graph: Any, uuids: List[str]) -> Dict[str, Any]:
     The delete statement carries the same ``NOT (v)--()`` gate as the probe, so
     a node that gained an edge in between is skipped rather than detached.
     """
-    counters = {
+    # Annotate as Dict[str, Any]: mypy inferred a heterogeneous dict literal as
+    # dict[str, object], which made every `+= 1` and `.append()` below an error
+    # while the runtime behaviour was always correct.
+    counters: Dict[str, Any] = {
         "deleted": 0,
         "skipped_still_referenced": 0,
         "already_gone": 0,
@@ -98,6 +97,7 @@ def _delete_orphans(graph: Any, uuids: List[str]) -> Dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             counters["errors"].append("delete %s: %s" % (str(uuid)[:16], exc))
     return counters
+
 
 def run_phase1_cluster(
     cfg: Any,
@@ -164,11 +164,13 @@ def run_phase1_cluster(
         # Not a failure. Reported so a reader knows the number came from the
         # cycle-resolution rule rather than from a converged fixed point.
         out["reason"] = (
-            "label propagation 2-cycled on %d node(s); resolved by the "
-            "smallest-uuid rule, so the partition is still reproducible"
-            % result.oscillating_nodes
-        ) if result.cycle_detected else (
-            "did not converge within %d rounds" % result.rounds
+            (
+                "label propagation 2-cycled on %d node(s); resolved by the "
+                "smallest-uuid rule, so the partition is still reproducible"
+                % result.oscillating_nodes
+            )
+            if result.cycle_detected
+            else ("did not converge within %d rounds" % result.rounds)
         )
     if result.oversized:
         out["oversized"] = True
@@ -215,9 +217,7 @@ def run_phase3_prune(
                 "detail": "snapshot read failed",
             }
 
-        plan: PrunePlan = plan_orphan_pruning(
-            snap["entities"], snap["mentions"], snap["relations"]
-        )
+        plan: PrunePlan = plan_orphan_pruning(snap["entities"], snap["mentions"], snap["relations"])
         prunable = plan.prunable
 
         out: Dict[str, Any] = {
@@ -243,9 +243,7 @@ def run_phase3_prune(
 
         if not force:
             out["status"] = "PLANNED"
-            out["reason"] = "dry-run: %d prunable node(s) withheld (force=False)" % len(
-                prunable
-            )
+            out["reason"] = "dry-run: %d prunable node(s) withheld (force=False)" % len(prunable)
             return out
 
         counters = _delete_orphans(graph, [o.uuid for o in prunable])

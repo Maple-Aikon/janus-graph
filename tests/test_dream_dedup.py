@@ -171,8 +171,7 @@ def test_chain_fold_removes_the_loser_and_keeps_the_survivor():
     assert len(plan.merges) == 2, "a 3-node chain needs two folds"
     final = {"u1", "u2", "u3"} - {m.victim_uuid for m in plan.merges}
     assert len(final) == 1, (
-        "expected 1 survivor among 3 nodes, got %s (chain did not fold)"
-        % sorted(final)
+        "expected 1 survivor among 3 nodes, got %s (chain did not fold)" % sorted(final)
     )
     assert final == {longest["uuid"]}, (
         "the longest summary must be the final survivor; got %s instead of %s"
@@ -244,15 +243,13 @@ def test_drop_counters_ignore_pre_existing_duplication():
     base = "identical summary text for the merge candidate pair here"
     ents = [_ent("u1", "n", base), _ent("u2", "n", base + " x")]
     # 5 pre-existing duplicate mentions that the merge never touches.
-    untouched = [
-        {"src_uuid": "ep%d" % i, "dst_uuid": "u9"}
-        for i in range(5)
-    ] + [{"src_uuid": "ep9", "dst_uuid": "u9"}]
+    untouched = [{"src_uuid": "ep%d" % i, "dst_uuid": "u9"} for i in range(5)] + [
+        {"src_uuid": "ep9", "dst_uuid": "u9"}
+    ]
     plan = plan_dedup(ents, mentions=untouched)
     assert len(plan.merges) == 1
     assert plan.mentions_to_drop == 0, (
-        "pre-existing duplicates must not be charged to this merge; got %d"
-        % plan.mentions_to_drop
+        "pre-existing duplicates must not be charged to this merge; got %d" % plan.mentions_to_drop
     )
 
 
@@ -432,9 +429,7 @@ def test_apply_order_is_create_before_delete_for_mentions():
     calls = [c.args[0] for c in graph.query.call_args_list if c.args]
     assert calls, "apply_plan issued no queries"
 
-    create_i = next(
-        (i for i, q in enumerate(calls) if "CREATE (s)-[e:MENTIONS" in q), None
-    )
+    create_i = next((i for i, q in enumerate(calls) if "CREATE (s)-[e:MENTIONS" in q), None)
     delete_i = next(
         (
             i
@@ -447,8 +442,7 @@ def test_apply_order_is_create_before_delete_for_mentions():
     assert delete_i is not None, "no MENTIONS DELETE issued"
     assert create_i < delete_i, (
         "redirect order is DELETE-then-CREATE; with no transaction available "
-        "a crash between them loses the edge (create at %d, delete at %d)"
-        % (create_i, delete_i)
+        "a crash between them loses the edge (create at %d, delete at %d)" % (create_i, delete_i)
     )
 
 
@@ -489,9 +483,7 @@ def test_apply_never_deletes_a_victim_still_holding_edges():
     # Every DETACH DELETE must also be scoped to the victim list, so a future
     # edit cannot widen it into a blanket delete.
     for q in deletes:
-        assert "v.uuid IN $victims" in q, (
-            "DETACH DELETE is not scoped to the victim list: %r" % q
-        )
+        assert "v.uuid IN $victims" in q, "DETACH DELETE is not scoped to the victim list: %r" % q
 
 
 # --------------------------------------------------------------------------

@@ -115,9 +115,13 @@ async def health_handler(request: web.Request) -> web.Response:
 
     # Phase 3: surface EpisodeQueueAdapter stats if wired.
     queue_stats = None
-    if getattr(ctx, "queue_adapter", None) is not None:
+    # Bind the narrowed attribute once: the guard is on ctx.queue_adapter, but
+    # re-reading ctx.queue_adapter later loses the narrowing (and could race a
+    # concurrent assignment of None). Same value, checked once.
+    queue_adapter = getattr(ctx, "queue_adapter", None)
+    if queue_adapter is not None:
         try:
-            queue_stats = ctx.queue_adapter.stats()
+            queue_stats = queue_adapter.stats()
         except Exception as e:  # pragma: no cover — defensive
             logger.debug("queue stats error: %s", e)
             queue_stats = {"error": str(e)}

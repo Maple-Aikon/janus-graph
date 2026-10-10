@@ -508,11 +508,20 @@ class SearchEngine:
         if not embeds or any(e.embedding is None for e in embeds):
             # Embedding failed → leave cosine=None; pipeline flags degraded.
             return len(rows)
-        query_vec = embeds[-1].embedding
+        # The `any(... is None)` guard above already proved every vector is
+        # present, but mypy cannot see that through a subscript, so the query
+        # vector stayed `Optional` and failed the `_cosine` signature. Validate
+        # once into a plain list instead: the early return here is unreachable
+        # in practice, and the old inline `else None` branch was unreachable
+        # for the same reason.
+        vectors: List[List[float]] = []
+        for e in embeds:
+            if e.embedding is None:  # pragma: no cover - unreachable via the guard
+                return len(rows)
+            vectors.append(e.embedding)
+        query_vec = vectors[-1]
         for idx, row in enumerate(rows):
-            row.cosine = (
-                _cosine(query_vec, embeds[idx].embedding) if embeds[idx].embedding else None
-            )
+            row.cosine = _cosine(query_vec, vectors[idx])
         return len(rows)
 
     def _mmr_rerank(self, rows: Sequence[FactRow], lam: float, top_k: int) -> List[FactRow]:

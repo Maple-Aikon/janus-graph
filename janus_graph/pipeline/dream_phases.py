@@ -125,15 +125,12 @@ class PrunePlan:
         return [o for o in self.candidates if o.prunable]
 
     def describe(self) -> str:
-        return (
-            "candidates=%d prunable=%d protected=%d (holding %d chars), deleted=%d"
-            % (
-                len(self.candidates),
-                len(self.prunable),
-                self.protected,
-                self.protected_chars,
-                self.deleted,
-            )
+        return "candidates=%d prunable=%d protected=%d (holding %d chars), deleted=%d" % (
+            len(self.candidates),
+            len(self.prunable),
+            self.protected,
+            self.protected_chars,
+            self.deleted,
         )
 
     def as_dict(self) -> Dict[str, Any]:
@@ -216,8 +213,7 @@ def find_orphan_candidates(
                     name=str(name),
                     summary=summary,
                     prunable=False,
-                    reason="unreferenced but holds %d chars of summary"
-                    % len(summary),
+                    reason="unreferenced but holds %d chars of summary" % len(summary),
                 )
             )
         else:
@@ -249,6 +245,7 @@ def plan_orphan_pruning(
 def summarize_prune_plan(plan: PrunePlan) -> str:
     """One line suitable for a dream report."""
     return plan.describe()
+
 
 # ---------------------------------------------------------------------------
 # Phase 1 — deterministic community clustering
@@ -303,8 +300,7 @@ class ClusterResult:
             return "SKIPPED (no entities in the snapshot)"
         parts = [
             "%d communities over %d nodes" % (self.communities, self.nodes),
-            "deterministic" if not self.cycle_detected
-            else "deterministic-after-cycle-resolution",
+            "deterministic" if not self.cycle_detected else "deterministic-after-cycle-resolution",
             "rounds=%d" % self.rounds,
             "structural floor: %d components, largest %d"
             % (self.components, self.largest_component),
@@ -312,15 +308,13 @@ class ClusterResult:
         ]
         if self.pinned_nodes:
             parts.append(
-                "%d low-degree nodes pinned (min_degree=%d)"
-                % (self.pinned_nodes, self.min_degree)
+                "%d low-degree nodes pinned (min_degree=%d)" % (self.pinned_nodes, self.min_degree)
             )
         if not self.converged:
             parts.append("did not converge in %d rounds" % self.rounds)
         if self.cycle_detected:
             parts.append(
-                "2-cycle on %d nodes resolved by smallest-uuid rule"
-                % self.oscillating_nodes
+                "2-cycle on %d nodes resolved by smallest-uuid rule" % self.oscillating_nodes
             )
         if self.oversized:
             parts.append(
@@ -408,9 +402,7 @@ def partition_hash(labels: Dict[str, int]) -> str:
     # which is the very assumption the prefix would be replacing. So the
     # prefix stays (it costs nothing) but its presence is not evidence that
     # a hash collision was ever found and fixed here.
-    blob = "".join(
-        "%d:%s" % (len(group), chr(31).join(group)) for group in canonical
-    )
+    blob = "".join("%d:%s" % (len(group), chr(31).join(group)) for group in canonical)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
@@ -451,7 +443,7 @@ def _resolve_cycle(
         by_component.setdefault(comp_of.get(node, 0), []).append(node)
 
     for group in by_component.values():
-        keeper_label = labels[group[0]]      # members are sorted => smallest uuid
+        keeper_label = labels[group[0]]  # members are sorted => smallest uuid
         for node in group:
             labels[node] = keeper_label
 
@@ -493,15 +485,23 @@ def cluster_graph(
         for v in vs:
             if v in keys and u != v:
                 adj[u].add(v)
-                adj[v].add(u)          # <-- the symmetry that was missing
+                adj[v].add(u)  # <-- the symmetry that was missing
 
     nodes = sorted(adj)
     if not nodes:
         return ClusterResult(
-            nodes=0, communities=0, rounds=0, converged=True,
-            cycle_detected=False, oscillating_nodes=0, pinned_nodes=0,
-            components=0, largest_component=0, largest_community=0,
-            min_degree=min_degree, partition_hash=partition_hash({}),
+            nodes=0,
+            communities=0,
+            rounds=0,
+            converged=True,
+            cycle_detected=False,
+            oscillating_nodes=0,
+            pinned_nodes=0,
+            components=0,
+            largest_component=0,
+            largest_community=0,
+            min_degree=min_degree,
+            partition_hash=partition_hash({}),
             oversized=False,
         )
 
@@ -510,8 +510,7 @@ def cluster_graph(
     labels = {u: rank[u] for u in nodes}
 
     comps = connected_components(adj)
-    comp_of = {node: idx
-              for idx, comp in enumerate(comps) for node in comp}
+    comp_of = {node: idx for idx, comp in enumerate(comps) for node in comp}
 
     prev = frozenset(labels.items())
     seen = {prev}
@@ -583,9 +582,7 @@ def plan_clustering(
     min_degree: int = DEFAULT_MIN_DEGREE,
 ) -> ClusterResult:
     """Phase 1 entry point. Never touches a database."""
-    return cluster_graph(
-        build_adjacency(entities, relations), min_degree=min_degree
-    )
+    return cluster_graph(build_adjacency(entities, relations), min_degree=min_degree)
 
 
 def cluster_report(
@@ -605,7 +602,8 @@ def cluster_report(
         # force short-circuits the comparison, so with 0 episodes an inequality
         # printed here would read as true when no comparison happened at all.
         why = "force=True bypassed the %d-episode threshold (%d episodes)" % (
-            threshold, total_episodes,
+            threshold,
+            total_episodes,
         )
     elif total_episodes >= threshold:
         why = "gate passed (%d episodes >= %d)" % (total_episodes, threshold)

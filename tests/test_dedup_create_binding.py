@@ -62,8 +62,7 @@ class _CypherAwareFalkor:
         self.created_edges = []  # (alias_src, alias_dst, uuid, labels)
         self.deleted = []
         self.mentions = [
-            (EPISODIC_UUID, VICTIM_UUID,
-             {"uuid": MENTION_EDGE_UUID, "group_id": "gid"})
+            (EPISODIC_UUID, VICTIM_UUID, {"uuid": MENTION_EDGE_UUID, "group_id": "gid"})
         ]
         # node uuid -> labels. An empty list == an unlabelled placeholder.
         self.node_labels = {
@@ -91,10 +90,10 @@ class _CypherAwareFalkor:
             def endpoint(alias):
                 if alias and alias in bound:
                     return self._uuid_for(alias, params), list(
-                        self.node_labels.get(self._uuid_for(alias, params), []))
+                        self.node_labels.get(self._uuid_for(alias, params), [])
+                    )
                 # unbound: a brand new, empty, unlabelled node
-                self._next_placeholder = getattr(
-                    self, "_next_placeholder", 9000) + 1
+                self._next_placeholder = getattr(self, "_next_placeholder", 9000) + 1
                 new_id = "placeholder-%d" % self._next_placeholder
                 self.node_labels[new_id] = []
                 return new_id, []
@@ -124,8 +123,10 @@ class _CypherAwareFalkor:
 
         if cypher.strip().startswith("MATCH (n:Entity)"):
             return _Result(
-                [[k, "CRG_TOOLS", SUMMARY_A if k == SURVIVOR_UUID else SUMMARY_B,
-                  None] for k in (SURVIVOR_UUID, VICTIM_UUID)]
+                [
+                    [k, "CRG_TOOLS", SUMMARY_A if k == SURVIVOR_UUID else SUMMARY_B, None]
+                    for k in (SURVIVOR_UUID, VICTIM_UUID)
+                ]
             )
 
         if "count(" in cypher:
@@ -144,8 +145,7 @@ class _CypherAwareFalkor:
     def _resolve(self, item, src, dst, props):
         alias, _, prop = item.strip().partition(".")
         if alias == "e":
-            return props.get(prop) if prop in (
-                "uuid", "group_id", "created_at") else None
+            return props.get(prop) if prop in ("uuid", "group_id", "created_at") else None
         if alias in ("s", "a"):
             return src
         if alias in ("n", "v", "b", "t"):
@@ -156,13 +156,18 @@ class _CypherAwareFalkor:
 def _plan():
     return plan_dedup(
         [
-            {"uuid": SURVIVOR_UUID, "name": "CRG_TOOLS", "summary": SUMMARY_A,
-             "created_at": None},
-            {"uuid": VICTIM_UUID, "name": "CRG_TOOLS", "summary": SUMMARY_B,
-             "created_at": None},
+            {"uuid": SURVIVOR_UUID, "name": "CRG_TOOLS", "summary": SUMMARY_A, "created_at": None},
+            {"uuid": VICTIM_UUID, "name": "CRG_TOOLS", "summary": SUMMARY_B, "created_at": None},
         ],
-        [{"uuid": MENTION_EDGE_UUID, "src_uuid": EPISODIC_UUID,
-          "dst_uuid": VICTIM_UUID, "created_at": None, "group_id": "gid"}],
+        [
+            {
+                "uuid": MENTION_EDGE_UUID,
+                "src_uuid": EPISODIC_UUID,
+                "dst_uuid": VICTIM_UUID,
+                "created_at": None,
+                "group_id": "gid",
+            }
+        ],
         [],
     )
 
@@ -197,9 +202,7 @@ def test_create_binds_the_matched_nodes_not_new_placeholders():
         "the MENTIONS source lost its label -> unreachable by "
         "(a:Episodic)-[:MENTIONS]->(b:Entity): %r" % (src_labels,)
     )
-    assert dst_labels == ["Entity"], (
-        "the MENTIONS target lost its label: %r" % (dst_labels,)
-    )
+    assert dst_labels == ["Entity"], "the MENTIONS target lost its label: %r" % (dst_labels,)
 
 
 def _move_queries() -> list:
@@ -235,14 +238,13 @@ def test_move_queries_bind_both_endpoints():
     """
     queries = _move_queries()
     assert len(queries) >= 2, (
-        "expected both the MENTIONS and the RELATES_TO move to be found, got %d"
-        % len(queries)
+        "expected both the MENTIONS and the RELATES_TO move to be found, got %d" % len(queries)
     )
     for cypher in queries:
         bound = _match_aliases(cypher)
-        assert len(bound) >= 2, (
-            "MATCH ... CREATE binds %r; both endpoints must be named: %r"
-            % (bound, cypher)
+        assert len(bound) >= 2, "MATCH ... CREATE binds %r; both endpoints must be named: %r" % (
+            bound,
+            cypher,
         )
 
 
@@ -256,6 +258,4 @@ def test_relations_create_also_binds_both_endpoints():
     assert rel, "expected the RELATES_TO CREATE to be present"
     for cypher in rel:
         bound = _match_aliases(cypher)
-        assert len(bound) >= 2, (
-            "RELATES_TO CREATE does not bind both endpoints: %r" % (cypher,)
-        )
+        assert len(bound) >= 2, "RELATES_TO CREATE does not bind both endpoints: %r" % (cypher,)

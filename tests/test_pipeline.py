@@ -219,39 +219,44 @@ async def test_dream_consolidation(temp_dir):
         # 4,187 communities over 5,844 real nodes -- an environment-dependent
         # test, not a regression. Patch the connection so the premise is true
         # by construction instead of by luck.
-        with patch(
-            # Patch BOTH bindings. dream.py calls dream_apply.run_phase1_cluster,
-            # which uses dream_apply's own module-level `_graph` imported at
-            # load time (`from .dedup_apply import _graph`). Patching only the
-            # source module leaves the name actually called untouched, so phase
-            # 1 reached the real FalkorDB and reported DONE with 4,186
-            # communities over 5,846 real nodes. This was also ORDER-DEPENDENT:
-            # it passed alone and failed when run after test_dream_phases.py.
-            # Patching both names removes the dependence on either binding.
-            "janus_graph.pipeline.dedup_apply._graph",
-            return_value=(None, "ConnectionError: TEST-SENTINEL-no-graph"),
-        ), patch(
-            "janus_graph.pipeline.dream_apply._graph",
-            return_value=(None, "ConnectionError: TEST-SENTINEL-no-graph"),
-        ), patch(
-            "janus_graph.pipeline.dedup_apply.run_phase2_dedup",
-            return_value={
-                "status": "SKIPPED",
-                "reason": sentinel,
-                "merges": 0,
-                "applied": False,
-            },
-        ), patch(
-            "janus_graph.pipeline.dream_apply.run_phase3_prune",
-            return_value={
-                "status": "SKIPPED",
-                "reason": sentinel3,
-                "candidates": 0,
-                "prunable": 0,
-                "deleted": 0,
-                "applied": False,
-                "detail": "no graph connection",
-            },
+        with (
+            patch(
+                # Patch BOTH bindings. dream.py calls dream_apply.run_phase1_cluster,
+                # which uses dream_apply's own module-level `_graph` imported at
+                # load time (`from .dedup_apply import _graph`). Patching only the
+                # source module leaves the name actually called untouched, so phase
+                # 1 reached the real FalkorDB and reported DONE with 4,186
+                # communities over 5,846 real nodes. This was also ORDER-DEPENDENT:
+                # it passed alone and failed when run after test_dream_phases.py.
+                # Patching both names removes the dependence on either binding.
+                "janus_graph.pipeline.dedup_apply._graph",
+                return_value=(None, "ConnectionError: TEST-SENTINEL-no-graph"),
+            ),
+            patch(
+                "janus_graph.pipeline.dream_apply._graph",
+                return_value=(None, "ConnectionError: TEST-SENTINEL-no-graph"),
+            ),
+            patch(
+                "janus_graph.pipeline.dedup_apply.run_phase2_dedup",
+                return_value={
+                    "status": "SKIPPED",
+                    "reason": sentinel,
+                    "merges": 0,
+                    "applied": False,
+                },
+            ),
+            patch(
+                "janus_graph.pipeline.dream_apply.run_phase3_prune",
+                return_value={
+                    "status": "SKIPPED",
+                    "reason": sentinel3,
+                    "candidates": 0,
+                    "prunable": 0,
+                    "deleted": 0,
+                    "applied": False,
+                    "detail": "no graph connection",
+                },
+            ),
         ):
             results = await run_dream_consolidation(settings=settings, force=True)
         assert results["status"] == "completed"
@@ -286,26 +291,30 @@ async def test_phase_report_shows_reason_and_detail_together(temp_dir):
         )
     )
     queue = EpisodeQueue(str(db_path))
-    with patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue), patch(
-        "janus_graph.pipeline.dedup_apply.run_phase2_dedup",
-        return_value={
-            "status": "SKIPPED",
-            "reason": "REASON-A",
-            "detail": "DETAIL-B",
-            "merges": 0,
-            "applied": False,
-        },
-    ), patch(
-        "janus_graph.pipeline.dream_apply.run_phase3_prune",
-        return_value={
-            "status": "SKIPPED",
-            "reason": "REASON-C",
-            "detail": "DETAIL-D",
-            "candidates": 0,
-            "prunable": 0,
-            "deleted": 0,
-            "applied": False,
-        },
+    with (
+        patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue),
+        patch(
+            "janus_graph.pipeline.dedup_apply.run_phase2_dedup",
+            return_value={
+                "status": "SKIPPED",
+                "reason": "REASON-A",
+                "detail": "DETAIL-B",
+                "merges": 0,
+                "applied": False,
+            },
+        ),
+        patch(
+            "janus_graph.pipeline.dream_apply.run_phase3_prune",
+            return_value={
+                "status": "SKIPPED",
+                "reason": "REASON-C",
+                "detail": "DETAIL-D",
+                "candidates": 0,
+                "prunable": 0,
+                "deleted": 0,
+                "applied": False,
+            },
+        ),
     ):
         results = await run_dream_consolidation(settings=settings, force=True)
     for key, reason, detail in (
@@ -328,12 +337,16 @@ async def test_dream_status_downgrades_when_a_phase_fails(temp_dir):
         )
     )
     queue = EpisodeQueue(str(db_path))
-    with patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue), patch(
-        "janus_graph.pipeline.dedup_apply.run_phase2_dedup",
-        side_effect=RuntimeError("dedup exploded"),
-    ), patch(
-        "janus_graph.pipeline.dream_apply.run_phase3_prune",
-        side_effect=RuntimeError("prune exploded"),
+    with (
+        patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue),
+        patch(
+            "janus_graph.pipeline.dedup_apply.run_phase2_dedup",
+            side_effect=RuntimeError("dedup exploded"),
+        ),
+        patch(
+            "janus_graph.pipeline.dream_apply.run_phase3_prune",
+            side_effect=RuntimeError("prune exploded"),
+        ),
     ):
         results = await run_dream_consolidation(settings=settings, force=True)
     assert results["status"] != "completed"
@@ -357,32 +370,38 @@ async def test_dream_nodes_before_is_real_not_zero(temp_dir):
         )
     )
     queue = EpisodeQueue(str(db_path))
-    with patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue), patch(
-        "janus_graph.pipeline.dedup_apply.run_phase2_dedup",
-        return_value={
-            "status": "DONE",
-            "reason": "",
-            "merges": 0,
-            "applied": False,
-            "entities_seen": 42,
-            "detail": "merged=0",
-        },
-    ), patch(
-        "janus_graph.pipeline.dream_apply.run_phase3_prune",
-        return_value={
-            "status": "DONE",
-            "reason": "",
-            "candidates": 1,
-            "prunable": 1,
-            "deleted": 2,
-            "applied": True,
-            "detail": "deleted=2",
-        },
+    with (
+        patch("janus_graph.pipeline.dream.EpisodeQueue", return_value=queue),
+        patch(
+            "janus_graph.pipeline.dedup_apply.run_phase2_dedup",
+            return_value={
+                "status": "DONE",
+                "reason": "",
+                "merges": 0,
+                "applied": False,
+                "entities_seen": 42,
+                "detail": "merged=0",
+            },
+        ),
+        patch(
+            "janus_graph.pipeline.dream_apply.run_phase3_prune",
+            return_value={
+                "status": "DONE",
+                "reason": "",
+                "candidates": 1,
+                "prunable": 1,
+                "deleted": 2,
+                "applied": True,
+                "detail": "deleted=2",
+            },
+        ),
     ):
         results = await run_dream_consolidation(settings=settings, force=True)
     assert results["nodes_before"] == 42
     assert results["nodes_after"] == 40
     assert results["phase_3_pruned"] == 2
+
+
 @pytest.mark.asyncio
 async def test_dream_phase1_reports_done_when_the_graph_is_reachable(temp_dir):
     """The other half of the pair the SKIPPED case above pins.
@@ -400,7 +419,8 @@ async def test_dream_phase1_reports_done_when_the_graph_is_reachable(temp_dir):
         "entities": [
             {"uuid": "a%d" % i, "name": "a%d" % i, "summary": "", "created_at": None}
             for i in range(3)
-        ] + [
+        ]
+        + [
             {"uuid": "b%d" % i, "name": "b%d" % i, "summary": "", "created_at": None}
             for i in range(3)
         ],
@@ -419,20 +439,24 @@ async def test_dream_phase1_reports_done_when_the_graph_is_reachable(temp_dir):
         def query(self, _q, *_a, **_kw):
             return []
 
-    with patch(
-        # Both names are imported into dream_apply at module load
-        # (`from .dedup_apply import _graph, load_graph_snapshot`), so each one
-        # must be patched where it is USED. Patching the source module alone
-        # silently does nothing, and the test then takes the unreachable branch.
-        "janus_graph.pipeline.dream_apply._graph", return_value=(_Graph(), None)
-    ), patch(
-        # dream_apply does `from .dedup_apply import load_graph_snapshot` at
-        # module load, so patching the source module does NOT change the name
-        # it actually calls. Patching dedup_apply here did nothing and the test
-        # failed with SKIPPED -- the same "patched a name nobody calls" shape
-        # that makes a test unable to fail.
-        "janus_graph.pipeline.dream_apply.load_graph_snapshot",
-        return_value=(snapshot, ""),
+    with (
+        patch(
+            # Both names are imported into dream_apply at module load
+            # (`from .dedup_apply import _graph, load_graph_snapshot`), so each one
+            # must be patched where it is USED. Patching the source module alone
+            # silently does nothing, and the test then takes the unreachable branch.
+            "janus_graph.pipeline.dream_apply._graph",
+            return_value=(_Graph(), None),
+        ),
+        patch(
+            # dream_apply does `from .dedup_apply import load_graph_snapshot` at
+            # module load, so patching the source module does NOT change the name
+            # it actually calls. Patching dedup_apply here did nothing and the test
+            # failed with SKIPPED -- the same "patched a name nobody calls" shape
+            # that makes a test unable to fail.
+            "janus_graph.pipeline.dream_apply.load_graph_snapshot",
+            return_value=(snapshot, ""),
+        ),
     ):
         out = run_phase1_cluster(MagicMock(), "graphiti_memory", min_degree=3)
 
@@ -449,20 +473,24 @@ async def test_dream_phase1_reports_done_when_the_graph_is_reachable(temp_dir):
     assert out["result"]["partition_hash"]
 
     # Same graph, nothing pinned: each triangle unifies into one community.
-    with patch(
-        # Both names are imported into dream_apply at module load
-        # (`from .dedup_apply import _graph, load_graph_snapshot`), so each one
-        # must be patched where it is USED. Patching the source module alone
-        # silently does nothing, and the test then takes the unreachable branch.
-        "janus_graph.pipeline.dream_apply._graph", return_value=(_Graph(), None)
-    ), patch(
-        # dream_apply does `from .dedup_apply import load_graph_snapshot` at
-        # module load, so patching the source module does NOT change the name
-        # it actually calls. Patching dedup_apply here did nothing and the test
-        # failed with SKIPPED -- the same "patched a name nobody calls" shape
-        # that makes a test unable to fail.
-        "janus_graph.pipeline.dream_apply.load_graph_snapshot",
-        return_value=(snapshot, ""),
+    with (
+        patch(
+            # Both names are imported into dream_apply at module load
+            # (`from .dedup_apply import _graph, load_graph_snapshot`), so each one
+            # must be patched where it is USED. Patching the source module alone
+            # silently does nothing, and the test then takes the unreachable branch.
+            "janus_graph.pipeline.dream_apply._graph",
+            return_value=(_Graph(), None),
+        ),
+        patch(
+            # dream_apply does `from .dedup_apply import load_graph_snapshot` at
+            # module load, so patching the source module does NOT change the name
+            # it actually calls. Patching dedup_apply here did nothing and the test
+            # failed with SKIPPED -- the same "patched a name nobody calls" shape
+            # that makes a test unable to fail.
+            "janus_graph.pipeline.dream_apply.load_graph_snapshot",
+            return_value=(snapshot, ""),
+        ),
     ):
         out0 = run_phase1_cluster(MagicMock(), "graphiti_memory", min_degree=0)
     assert out0["status"] == "DONE"

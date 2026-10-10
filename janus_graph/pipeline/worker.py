@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Union
+from typing import Optional, Union, cast
 
 from ..config import JanusSettings, load_config
 from ..core.contracts import Settings
@@ -51,14 +51,24 @@ class EpisodeWorker:
 
         payload = record.payload
         content = payload.get("content", "")
-        group_id = payload.get("group_id") or self.settings.graphiti.group_id
-        name = payload.get("name") or f"ep_{record.id[:8]}"
-        source_desc = payload.get("source_description", "agent_interaction")
         # getattr chain: tests build Settings(report=...) with no graphiti
         # section at all, so a direct attribute chain raises AttributeError
         # before add_episode is ever reached.
         _graphiti = getattr(self.settings, "graphiti", None)
         custom_instructions = getattr(_graphiti, "custom_extraction_instructions", None)
+        # The `or` short-circuits: settings.graphiti is only read when the
+        # payload carries no group_id. Measured 2026-10-10 -- BOTH payload
+        # writers (queue.EpisodeQueue.enqueue and
+        # daemon.episode_queue_adapter) always write a group_id, so on any
+        # real row this fallback is dead code. `cast` is an identity function
+        # at runtime, so the AttributeError a contracts.Settings would raise
+        # here is preserved exactly; the cast only stops mypy from reporting
+        # it. Tests pin that contract
+        # (tests/test_extraction_instructions.py::test_worker_survives_
+        # settings_without_graphiti_section).
+        group_id = payload.get("group_id") or cast(JanusSettings, self.settings).graphiti.group_id
+        name = payload.get("name") or f"ep_{record.id[:8]}"
+        source_desc = payload.get("source_description", "agent_interaction")
 
         if not content.strip():
             logger.warning("Episode %s has empty content, skipping.", record.id)
@@ -66,14 +76,39 @@ class EpisodeWorker:
             return True
 
         await self.queue.update_checkpoint(record.id, "ingesting")
-        client = create_graphiti_instance(self.settings)
+        # create_graphiti_instance is typed (settings: Optional[JanusSettings]).
+        # Passing a contracts.Settings crashes inside it at
+        # `cfg.graphiti.llm.api_key` -- measured 2026-10-10 -- but no
+        # production caller does: cli/main.py and daemon/cron_loop.py both pass
+        # a JanusSettings, and every test that reaches this line patches
+        # create_graphiti_instance. `cast` is an identity function, so the
+        # crash and the `should_retry` classification of it (AttributeError ->
+        # retry=True, KILL-4) are unchanged.
+        client = create_graphiti_instance(cast(JanusSettings, self.settings))
 
         ref_time = datetime.now(timezone.utc)
         if record.created_at:
             try:
                 ref_time = datetime.fromisoformat(record.created_at)
-            except Exception:
-                pass
+            except Exception as err:
+                # Never silently swallow this. The fallback is NOT equivalent:
+                # it stamps the episode with ingest time instead of creation
+                # time, which quietly corrupts temporal attribution in the
+                # graph. A warning is the correct altitude -- raising here
+                # would drop an otherwise-ingestable episode on the floor.
+                #
+                # Deliberately still `Exception`, not `ValueError`: narrowing it
+                # would turn a non-str created_at (e.g. an int from a migrated
+                # row) from a silent fallback into a hard failure. This change
+                # adds observability ONLY; the accepted-value set is unchanged.
+                logger.warning(
+                    "Episode %s has unparseable created_at %r (%s: %s); "
+                    "falling back to ingest time -- temporal attribution may be off",
+                    record.id,
+                    record.created_at,
+                    type(err).__name__,
+                    err,
+                )
 
         # L1: only pass the kwarg when configured. Passing it always,
         # even as None, changes the add_episode call shape and breaks

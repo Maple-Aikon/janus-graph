@@ -78,8 +78,7 @@ def test_live_config_resolves_dedup_apply_but_shadow_cannot():
     # on a contracts.Settings — the failure is a silent dry-run, not an error.
     bare = Settings()
     assert (
-        bool(getattr(getattr(getattr(bare, "pipeline", None), "dream", None),
-                     "dedup_apply", False))
+        bool(getattr(getattr(getattr(bare, "pipeline", None), "dream", None), "dedup_apply", False))
         is False
     )
 

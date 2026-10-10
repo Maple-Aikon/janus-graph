@@ -227,9 +227,7 @@ async def test_get_coerces_float_params_not_pass_through(base_settings, mock_eng
 async def test_get_float_params_accepted_shapes(base_settings, mock_engine, raw, expected):
     """float() shapes a query string actually produces."""
     ctx = _make_ctx(base_settings, mock_engine)
-    resp = await search_graph_handler(
-        _get(ctx, "seed_entities=a&max_hops=1&min_cosine=" + raw)
-    )
+    resp = await search_graph_handler(_get(ctx, "seed_entities=a&max_hops=1&min_cosine=" + raw))
     assert resp.status == 200
     assert mock_engine.search.await_args.args[0]["min_cosine"] == expected
 
@@ -239,9 +237,7 @@ async def test_get_non_numeric_min_cosine_returns_400(base_settings, mock_engine
     An in-RANGE-but-wrong-magnitude value (1.5) is NOT handled here: it is
     passed through as a float and rejected by validate_request as 422."""
     ctx = _make_ctx(base_settings, mock_engine)
-    resp = await search_graph_handler(
-        _get(ctx, "seed_entities=a&max_hops=1&min_cosine=abc")
-    )
+    resp = await search_graph_handler(_get(ctx, "seed_entities=a&max_hops=1&min_cosine=abc"))
     assert resp.status == 400
     body = await _json_of(resp)
     assert body["code"] == "INVALID_BODY"
@@ -253,9 +249,7 @@ async def test_get_in_range_but_high_min_cosine_reaches_engine_as_float(base_set
     """1.5 is a valid FLOAT and an INVALID cosine. The handler must not
     range-check (that is validate_request's job, 422) and must not stringify."""
     ctx = _make_ctx(base_settings, mock_engine)
-    resp = await search_graph_handler(
-        _get(ctx, "seed_entities=a&max_hops=1&min_cosine=1.5")
-    )
+    resp = await search_graph_handler(_get(ctx, "seed_entities=a&max_hops=1&min_cosine=1.5"))
     assert resp.status == 200
     assert mock_engine.search.await_args.args[0]["min_cosine"] == 1.5
 

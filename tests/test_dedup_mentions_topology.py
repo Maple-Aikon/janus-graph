@@ -106,8 +106,10 @@ class _FakeFalkor:
 
         if cypher.strip().startswith("MATCH (n:Entity)"):
             return _Result(
-                [[k, "CRG_TOOLS", SUMMARY_A if k == SURVIVOR_UUID else SUMMARY_B, None]
-                 for k in (SURVIVOR_UUID, VICTIM_UUID)]
+                [
+                    [k, "CRG_TOOLS", SUMMARY_A if k == SURVIVOR_UUID else SUMMARY_B, None]
+                    for k in (SURVIVOR_UUID, VICTIM_UUID)
+                ]
             )
 
         if "count(" in cypher:
@@ -122,13 +124,18 @@ class _FakeFalkor:
 def _plan():
     return plan_dedup(
         [
-            {"uuid": SURVIVOR_UUID, "name": "CRG_TOOLS", "summary": SUMMARY_A,
-             "created_at": None},
-            {"uuid": VICTIM_UUID, "name": "CRG_TOOLS", "summary": SUMMARY_B,
-             "created_at": None},
+            {"uuid": SURVIVOR_UUID, "name": "CRG_TOOLS", "summary": SUMMARY_A, "created_at": None},
+            {"uuid": VICTIM_UUID, "name": "CRG_TOOLS", "summary": SUMMARY_B, "created_at": None},
         ],
-        [{"uuid": "e1", "src_uuid": EPISODIC_UUID, "dst_uuid": VICTIM_UUID,
-          "created_at": None, "group_id": "gid"}],
+        [
+            {
+                "uuid": "e1",
+                "src_uuid": EPISODIC_UUID,
+                "dst_uuid": VICTIM_UUID,
+                "created_at": None,
+                "group_id": "gid",
+            }
+        ],
         [],
     )
 

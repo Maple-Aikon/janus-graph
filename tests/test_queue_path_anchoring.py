@@ -131,10 +131,14 @@ def test_contracts_settings_queue_path_is_not_cwd_relative(_foreign_cwd_and_home
 
 def test_dream_anchors_contracts_settings_queue_path(_foreign_cwd_and_home):
     """The branch that WAS reachable: dream runs to completion on a bare
-    ``contracts.Settings`` (cron does not -- it raises on
-    ``pipeline.drain_batch_size`` before reaching its db_path line, measured
-    2026-10-02). EpisodeQueue is stubbed so the assertion is on *which path
-    dream resolved*, not on the work it then does.
+    ``contracts.Settings`` and resolves the home-anchored path.
+
+    EpisodeQueue is stubbed so the assertion is on *which path dream
+    resolved*, not on the work it then does.
+
+    Historically cron did NOT reach its db_path line here -- it raised on
+    ``pipeline.drain_batch_size`` first (measured 2026-10-02). That was a
+    tripwire, not a guarantee; see the sibling cron test below.
     """
     import asyncio
 
@@ -156,27 +160,117 @@ def test_dream_anchors_contracts_settings_queue_path(_foreign_cwd_and_home):
     assert captured["path"] == str(_foreign_cwd_and_home / "data" / "queue.db")
 
 
-def test_cron_does_not_reach_its_db_path_with_contracts_settings(_foreign_cwd_and_home):
-    """Locks the measurement that makes cron's change defence-in-depth only.
+def test_cron_anchors_contracts_settings_queue_path(_foreign_cwd_and_home):
+    """Cron now REACHES its db_path line on a bare ``contracts.Settings``.
 
-    If a future ``contracts.PipelineSettings`` grows ``drain_batch_size``,
-    this test starts failing and the cron branch becomes genuinely live --
-    which is precisely when the home-anchor has to hold.
+    This test used to be a tripwire -- it asserted ``pytest.raises(
+    AttributeError, match="drain_batch_size")``, because cron's pipeline
+    reads raised before the path was ever computed. That was defence in depth
+    against a CWD-relative ``./data/queue.db``, not a guarantee of it.
+
+    2026-10-10: the mypy gate work replaced those direct attribute reads with
+    getattr fallbacks, so the tripwire fired -- exactly the event it was
+    written to announce. The obligation it encoded now transfers here: cron
+    must anchor the path under the home directory, not under the CWD.
     """
     import asyncio
 
-    from janus_graph.pipeline.cron import run_cron_sweep
+    import janus_graph.pipeline.cron as cron_mod
 
-    with pytest.raises(AttributeError, match="drain_batch_size"):
-        asyncio.run(run_cron_sweep(Settings()))
+    captured = {}
+
+    class _CapturingQueue:
+        """Cron's sweep calls three methods on the queue before it ever gets
+        to add_episode; the path is captured at construction. dream.py needs
+        fewer, which is why its stub does not carry these."""
+
+        def __init__(self, db_path=None, **_kwargs):
+            captured["path"] = str(db_path)
+
+        async def reap_stuck_processing(self, timeout_sec=None):
+            return 0
+
+        async def claim_next_batch(self, limit=None):
+            return []
+
+        async def mark_failed(self, *_a, **_k):
+            return None
+
+        def get_stats(self):
+            return {}
+
+        def count_total(self):
+            return 0
+
+    original = cron_mod.EpisodeQueue
+    cron_mod.EpisodeQueue = _CapturingQueue
+    try:
+        asyncio.run(cron_mod.run_cron_sweep(Settings()))
+    finally:
+        cron_mod.EpisodeQueue = original
+
+    assert captured["path"] == str(_foreign_cwd_and_home / "data" / "queue.db")
+
+
+def test_cron_anchors_janus_settings_with_missing_pipeline_path(_foreign_cwd_and_home):
+    """The other live path: a JanusSettings whose ``pipeline.queue_db_path``
+    is None takes the ``paths``/default fallback. It must still be anchored.
+
+    Before 2026-10-10 that fallback read ``getattr(cfg.paths, ...)``;
+    ``cfg.paths`` is evaluated eagerly and JanusSettings has no ``paths``
+    field, so it raised AttributeError instead of falling back. The home
+    anchor was never reached -- it is reachable now, so it is asserted.
+    """
+    import asyncio
+
+    import janus_graph.pipeline.cron as cron_mod
+    from janus_graph.config import JanusSettings
+
+    cfg = JanusSettings()
+    cfg.pipeline.queue_db_path = None
+
+    captured = {}
+
+    class _CapturingQueue:
+        """Same stub as the sibling cron test; see its docstring."""
+
+        def __init__(self, db_path=None, **_kwargs):
+            captured["path"] = str(db_path)
+
+        async def reap_stuck_processing(self, timeout_sec=None):
+            return 0
+
+        async def claim_next_batch(self, limit=None):
+            return []
+
+        async def mark_failed(self, *_a, **_k):
+            return None
+
+        def get_stats(self):
+            return {}
+
+        def count_total(self):
+            return 0
+
+    original = cron_mod.EpisodeQueue
+    cron_mod.EpisodeQueue = _CapturingQueue
+    try:
+        asyncio.run(cron_mod.run_cron_sweep(cfg))
+    finally:
+        cron_mod.EpisodeQueue = original
+
+    assert captured["path"] == str(_foreign_cwd_and_home / "data" / "queue.db")
 
 
 def test_home_anchored_db_is_a_real_readable_queue(_foreign_cwd_and_home):
     """The home-anchored DB is a working SQLite queue, not just a path."""
     queue = EpisodeQueue()
-    assert sqlite3.connect(str(queue.db_path)).execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='episodes'"
-    ).fetchone() is not None
+    assert (
+        sqlite3.connect(str(queue.db_path))
+        .execute("SELECT name FROM sqlite_master WHERE type='table' AND name='episodes'")
+        .fetchone()
+        is not None
+    )
 
 
 # ── FileSink: the site that actually recreated /tmp/data ────────────────

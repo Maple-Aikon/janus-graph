@@ -53,9 +53,7 @@ async def _run_one_episode(queue, settings):
     mock_client.add_episode = AsyncMock(return_value=None)
 
     worker = EpisodeWorker(queue, settings)
-    with patch(
-        "janus_graph.core.instance.create_graphiti_instance", return_value=mock_client
-    ):
+    with patch("janus_graph.core.instance.create_graphiti_instance", return_value=mock_client):
         ok = await worker.process_record(records[0])
 
     assert ok is True, "episode should ingest successfully"
@@ -65,15 +63,12 @@ async def _run_one_episode(queue, settings):
 @pytest.mark.asyncio
 async def test_custom_extraction_instructions_forwarded_to_add_episode(temp_queue):
     """A configured instruction string must arrive at add_episode verbatim."""
-    _ep_id, client = await _run_one_episode(
-        temp_queue, _settings("NEVER extract file paths.")
-    )
+    _ep_id, client = await _run_one_episode(temp_queue, _settings("NEVER extract file paths."))
 
     assert client.add_episode.await_count == 1
     kwargs = client.add_episode.await_args.kwargs
     assert "custom_extraction_instructions" in kwargs, (
-        "configured instruction did not reach add_episode; "
-        f"keys seen: {sorted(kwargs)}"
+        f"configured instruction did not reach add_episode; keys seen: {sorted(kwargs)}"
     )
     assert kwargs["custom_extraction_instructions"] == "NEVER extract file paths."
     # the rest of the call must be untouched by the new kwarg
@@ -116,8 +111,7 @@ async def test_custom_extraction_instructions_ignores_empty_string(temp_queue):
 
     kwargs = client.add_episode.await_args.kwargs
     assert "custom_extraction_instructions" not in kwargs, (
-        "empty-string instruction should be treated as unset; "
-        f"keys seen: {sorted(kwargs)}"
+        f"empty-string instruction should be treated as unset; keys seen: {sorted(kwargs)}"
     )
 
 

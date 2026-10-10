@@ -14,6 +14,7 @@ be SKIPPED with an error, never moved against a NULL uuid.
 Attack 4 (NEW INVENTED PROPERTIES): the CREATE must not reintroduce
 src_uuid/dst_uuid on MENTIONS -- that is the bug itself.
 """
+
 import re
 
 from janus_graph.pipeline.dedup import plan_dedup
@@ -36,8 +37,15 @@ def _plan():
             {"uuid": SURVIVOR_UUID, "name": "CRG_TOOLS", "summary": SUMMARY_A},
             {"uuid": VICTIM_UUID, "name": "CRG_TOOLS", "summary": SUMMARY_B},
         ],
-        [{"uuid": "e1", "src_uuid": EPISODIC_UUID, "dst_uuid": VICTIM_UUID,
-          "created_at": None, "group_id": "gid"}],
+        [
+            {
+                "uuid": "e1",
+                "src_uuid": EPISODIC_UUID,
+                "dst_uuid": VICTIM_UUID,
+                "created_at": None,
+                "group_id": "gid",
+            }
+        ],
         [],
     )
 
