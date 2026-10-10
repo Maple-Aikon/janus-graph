@@ -240,6 +240,105 @@ async def test_probe_warming_up_does_not_trip_breaker(fast_breaker):
     assert fast_breaker.state is CircuitState.CLOSED
 
 
+# --- DEAD BRANCH (regression: ProbeState str-Enum truthiness) --------------
+#
+# ProbeState is a `str, Enum` whose members all have non-empty values, so
+# every member is truthy. Before the fix `_probe_redis` was annotated
+# `-> bool` and `probe()` tested it with a bare `if not alive:`, which meant:
+#   * DEAD never reached the pidfile fallback, and
+#   * a dead FalkorDB called breaker.record_success() and reported alive.
+# Consequences in production: `/health` answered status="ready" and
+# `falkor_ok="dead"`, and the 503 FALKOR_DISCONNECTED branch in
+# http_search_memory_handler.py was unreachable.
+
+
+def _dead_supervisor(fast_breaker, pidfile_alive=False):
+    manager = MagicMock(spec=FalkorDBServerManager)
+    manager.is_running.return_value = pidfile_alive
+    supervisor = DaemonSupervisor(
+        engine_config=MagicMock(host="127.0.0.1", port=1),
+        circuit_config=FalkorCircuitSettings(failure_threshold=3),
+        manager=manager,
+    )
+    supervisor._breaker = fast_breaker
+    return supervisor, manager
+
+
+async def test_probe_dead_returns_false_and_records_failure(fast_breaker):
+    """DEAD must NOT be reported as alive, and must count as a failure."""
+    supervisor, _ = _dead_supervisor(fast_breaker)
+
+    async def fake_dead():
+        return ProbeState.DEAD
+
+    supervisor._probe_redis = fake_dead  # type: ignore[assignment]
+
+    result = await supervisor.probe()
+
+    assert result is False
+    assert fast_breaker.failure_count == 1
+
+
+async def test_probe_dead_consults_pidfile_fallback(fast_breaker):
+    """The pidfile fallback must run when PING reports DEAD.
+
+    Before the fix the truthy enum skipped this branch entirely.
+    """
+    supervisor, manager = _dead_supervisor(fast_breaker, pidfile_alive=False)
+
+    async def fake_dead():
+        return ProbeState.DEAD
+
+    supervisor._probe_redis = fake_dead  # type: ignore[assignment]
+
+    await supervisor.probe()
+    assert manager.is_running.called, "pidfile fallback was skipped"
+
+
+async def test_probe_dead_rescued_by_pidfile_reports_alive(fast_breaker):
+    """Falkor started outside this cwd: PING DEAD but pidfile alive."""
+    supervisor, _ = _dead_supervisor(fast_breaker, pidfile_alive=True)
+
+    async def fake_dead():
+        return ProbeState.DEAD
+
+    supervisor._probe_redis = fake_dead  # type: ignore[assignment]
+
+    result = await supervisor.probe()
+
+    assert result is True
+    assert fast_breaker.failure_count == 0
+
+
+async def test_probe_alive_is_unaffected(fast_breaker):
+    """ALIVE keeps its old behaviour: True + record_success, no fallback."""
+    supervisor, manager = _dead_supervisor(fast_breaker)
+
+    async def fake_alive():
+        return ProbeState.ALIVE
+
+    supervisor._probe_redis = fake_alive  # type: ignore[assignment]
+
+    result = await supervisor.probe()
+
+    assert result is True
+    assert fast_breaker.failure_count == 0
+    assert not manager.is_running.called
+
+
+async def test_probe_state_members_are_all_truthy():
+    """Guards the root cause itself.
+
+    If someone ever gives ProbeState an empty value or a __bool__, the
+    truthiness bug cannot come back through this module.
+    """
+    assert bool(ProbeState.ALIVE)
+    assert bool(ProbeState.WARMING_UP)
+    assert bool(ProbeState.DEAD)
+    # So the module MUST compare explicitly rather than by truthiness.
+    assert (ProbeState.DEAD is ProbeState.ALIVE) is False
+
+
 # --- 1 SUBPROCESS TIMEOUT TEST ---------------------------------------------
 
 

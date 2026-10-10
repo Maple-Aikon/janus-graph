@@ -196,10 +196,17 @@ class DaemonSupervisor:
 
     # ─── public ──────────────────────────────────────────────────────────
 
-    async def _probe_redis(self) -> bool:
+    async def _probe_redis(self) -> ProbeState:
         """Plan §3.3 Option C: probe host:port via Redis PING.
 
-        Returns True iff server responded PONG within timeout.
+        Returns the raw ``ProbeState`` classification — ALIVE / WARMING_UP /
+        DEAD — NOT a bool. Callers must compare with
+        ``is ProbeState.ALIVE``; every member of this ``str``-Enum is
+        truthy, so a bare ``if await self._probe_redis():`` treats a dead
+        FalkorDB as alive (it silently disables the pidfile fallback and
+        calls ``record_success`` on the breaker). See the module history in
+        the fix commit.
+
         Runs in to_thread to keep async loop responsive.
         """
         timeout = float(getattr(self._circuit_cfg, "probe_timeout_sec", _DEFAULT_PROBE_TIMEOUT_SEC))
@@ -214,7 +221,7 @@ class DaemonSupervisor:
         if not await self._breaker.allow_probe():
             return False
         # Try Redis PING first (Plan §3.3 Option C — handles pidfile path mismatch).
-        if await self._probe_redis():
+        if await self._probe_redis() is ProbeState.ALIVE:
             return True
         # Fallback: pidfile check (covers edge case where Redis-protocol probe
         # races with start-up; pidfile is authoritative for "we started it").
@@ -226,17 +233,37 @@ class DaemonSupervisor:
         Returns True iff Falkor is alive (Redis PING or pidfile).
         Updates breaker on result (success → reset, failure → record_failure).
         Does NOT call ``start()`` — that's a separate explicit operation.
+
+        Breaker policy:
+          ALIVE      → record_success()
+          WARMING_UP → breaker left untouched (not a failure)
+          DEAD       → record_failure()
         """
         if not await self._breaker.allow_probe():
             # OPEN-skip: no syscall, no Falkor touch (T8 verification).
             logger.info("falkordb_supervisor: probe skipped (circuit OPEN)")
             return False
 
+        warming_up = False
         try:
-            # Plan §3.3 Option C: Redis PING first.
-            alive = await self._probe_redis()
-            if not alive:
-                # Fallback to pidfile (handles edge case where Redis is mid-startup).
+            # Plan §3.3 Option C: Redis PING first. Only ALIVE counts as
+            # alive — WARMING_UP and DEAD are both truthy enum members, so
+            # a bare truthiness test would skip the pidfile fallback below
+            # and record a breaker *success* for a dead FalkorDB.
+            redis_state = await self._probe_redis()
+            if redis_state is ProbeState.ALIVE:
+                alive: bool = True
+            elif redis_state is ProbeState.WARMING_UP:
+                # Redis bound the port but is still hydrating (-LOADING).
+                # Per module contract: do NOT count as failure and do NOT
+                # trip the breaker. Try the pidfile only to decide what to
+                # *report*, but leave the breaker untouched either way.
+                alive = await asyncio.to_thread(self._manager.is_running)
+                warming_up = True
+            else:
+                # DEAD — connection refused / timeout / malformed reply.
+                # Fallback to pidfile (handles edge case where Redis is
+                # mid-startup, or was started outside this cwd).
                 alive = await asyncio.to_thread(self._manager.is_running)
         except Exception as e:
             # Defensive: any probe exception counts as failure.
@@ -245,6 +272,10 @@ class DaemonSupervisor:
 
         if alive:
             await self._breaker.record_success()
+        elif warming_up:
+            # WARMING_UP is not a failure — leave the breaker counters
+            # untouched so a hydrating Redis cannot trip the circuit.
+            logger.debug("falkordb_supervisor: probe warming_up (breaker untouched)")
         else:
             await self._breaker.record_failure()
         return alive

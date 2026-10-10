@@ -3,7 +3,7 @@
 v0.5.0 (PR 1 of plan ``add-http-searchmemory-endpoint-via-shared-engine-module-v2-...``):
 
   - Test A: graphiti-core version pin drift-check (SOFT WARNING, not hard
-    fail — see 2026-09-16 lesson). Plan §5 (F7) originally pins
+    fail -- see 2026-09-16 lesson). Plan section 5 (F7) originally pinned
     ``>=0.20.0,<0.21.0a0`` because the v0.4.7 hotfix rationale depends on
     ``Graphiti.search()`` NOT accepting ``search_config`` (it hardcodes
     ``EDGE_HYBRID_SEARCH_RRF``); only the module-level ``graphiti_search``
@@ -11,18 +11,19 @@ v0.5.0 (PR 1 of plan ``add-http-searchmemory-endpoint-via-shared-engine-module-v
     ``0.21.0a1`` / ``0.21.0rc1`` because they sort below ``0.21.0`` on
     the version line.
 
-    Why SOFT (2026-09-16): production is running ``graphiti-core==0.30.1``
-    (silent drift past F7 pin — ``pyproject.toml`` only says ``>=0.20``
-    with no upper bound). Live re-validation (em 2026-09-16, see plan
-    §F7 follow-up note): at 0.30.1, ``graphiti_search`` still accepts
-    ``config: SearchConfig`` and ``Graphiti.search`` still does NOT — so
-    the F7 rationale HOLDS at 0.30.1. A hard ``assert major_minor ==
-    (0, 20)`` would break the test suite in production, forcing a
-    pyproject.toml downgrade that would actually be unsafe (0.30.1 has
-    fixes we depend on). So we emit a ``UserWarning`` whenever the
-    version drifts outside the F7 pin range; CI/local devs see the
-    warning, plan-review sees the audit, no false-positive test failure.
-    Re-validate at next major bump (0.31.0 / 0.21.0 release).
+    Why SOFT (2026-09-16): production runs ``graphiti-core`` 0.30.1.
+    Live re-validation (em 2026-09-16, see plan F7 follow-up note): at
+    0.30.1, ``graphiti_search`` still accepts ``config: SearchConfig`` and
+    ``Graphiti.search`` still does NOT -- so the F7 rationale HOLDS at
+    0.30.1. A hard ``assert major_minor == (0, 20)`` would break the test
+    suite in production, forcing a pyproject.toml downgrade that would
+    actually be unsafe (0.30.1 has fixes we depend on).
+
+    UPDATED 2026-10-10: the pin is now DECLARED exactly (``==0.30.1``) and
+    the test compares the installed version against that declared pin
+    rather than a hardcoded ``0.20.*`` range. The old range check fired on
+    every single run, which is noise that teaches people to ignore the one
+    warning this test exists to raise.
 
   - Test B: NFC/NFD diacritic normalization for stacked diacritics.
 
@@ -46,9 +47,11 @@ v0.5.0 (PR 1 of plan ``add-http-searchmemory-endpoint-via-shared-engine-module-v
 
 from __future__ import annotations
 
+import tomllib
 import unicodedata
 import warnings
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -62,52 +65,77 @@ from janus_graph.engine.search_memory import search_memory
 
 
 def test_graphiti_core_pin_drift_check():
-    """Belt-and-suspenders guard for plan F7 pin ``>=0.20.0,<0.21.0a0``.
+    """Guard that the INSTALLED ``graphiti-core`` matches the DECLARED pin.
 
-    PEP 440 nuance: pre-releases (``0.21.0a1``, ``0.21.0rc1``) sort BELOW
-    ``0.21.0`` on the version line, so ``<0.21.0`` alone does NOT exclude
-    them. We pin ``<0.21.0a0`` (the zero-th pre-release marker, which
-    sorts below all real pre-releases) to actually exclude the 0.21.x
-    series.
+    History: plan section 5 (F7) originally pinned ``>=0.20.0,<0.21.0a0``
+    because the v0.4.7 hotfix rationale depends on ``Graphiti.search()`` NOT
+    accepting ``search_config`` (it hardcodes ``EDGE_HYBRID_SEARCH_RRF``);
+    only the module-level ``graphiti_search`` does. PEP 440: ``<0.21.0`` does
+    NOT exclude pre-releases like ``0.21.0a1`` / ``0.21.0rc1`` because they
+    sort below ``0.21.0`` on the version line.
 
-    F7 rationale: ``graphiti_core.Graphiti.search()`` in 0.20.x does NOT
-    accept ``search_config`` kwarg (it hardcodes
-    ``EDGE_HYBRID_SEARCH_RRF``). Only module-level
-    ``graphiti_search`` consumes ``SearchConfig``. If 0.21.x changes that,
-    the entire MMR recipe pipeline breaks silently.
+    2026-10-10: production ran 0.30.1 while ``pyproject.toml`` declared only
+    ``>=0.20`` with no upper bound, so the de-facto version was UNDECLARED.
+    The pin is now exact: ``==0.30.1``.
 
-    SOFT WARNING behavior (2026-09-16): production runs ``graphiti-core``
-    ``0.30.1`` (past the F7 pin). Live re-validation at 0.30.1 confirms
-    the F7 rationale still holds — ``graphiti_search`` accepts
-    ``config``, ``Graphiti.search`` does not. So we emit a
-    ``UserWarning`` on drift (visible in pytest -W output and CI logs)
-    rather than hard-failing, which would force an unsafe downgrade.
-    The warning stays in the audit trail: any future bump past 0.30.x
-    requires a fresh F7 re-validation, and the warning is the trigger.
+    This test therefore compares the installed version against the pin read
+    from ``pyproject.toml`` instead of hardcoding a historical range. Keeping
+    the hardcoded ``(0, 20)`` check would make this warn on EVERY run -- noise
+    that trains people to ignore the one warning the test exists to raise.
+
+    SOFT WARNING (2026-09-16): we do not hard-fail. An exact-pin mismatch
+    should surface as an explicit re-validation decision (F7 re-check at the
+    new version), not as an opaque suite break.
     """
     try:
         graphiti_ver_str = version("graphiti-core")
     except PackageNotFoundError:
         pytest.skip("graphiti-core not installed in this env")
 
-    # Compare via tuple of ints; pre-release markers make string compare
-    # unreliable. We only need major.minor to be 0.20.*.
-    parts = graphiti_ver_str.split(".")
-    major_minor = (int(parts[0]), int(parts[1]))
+    declared = None
+    try:
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        with open(pyproject, "rb") as fh:
+            deps = tomllib.load(fh)["project"]["dependencies"]
+        for spec in deps:
+            if spec.replace(" ", "").startswith("graphiti-core"):
+                declared = spec
+                break
+    except Exception:  # noqa: BLE001 - a drift guard must never break the suite
+        declared = None
 
-    if major_minor != (0, 20):
-        warnings.warn(
-            f"graphiti-core={graphiti_ver_str!r} drifted outside the "
-            f"plan F7 pin range 0.20.*. The v0.4.7 hotfix rationale "
-            f"(module-level graphiti_search vs Graphiti.search with no "
-            f"search_config kwarg) was validated against 0.20.x. "
-            f"Em 2026-09-16 live re-validation confirmed F7 still holds "
-            f"at 0.30.1. Next bump (0.31.0 / 0.21.0 release) requires a "
-            f"fresh re-validation — update pyproject.toml pin only after "
-            f"that. See plan §F7 follow-up note.",
-            UserWarning,
-            stacklevel=2,
-        )
+    if declared is None:
+        pytest.skip("could not read the graphiti-core pin from pyproject.toml")
+
+    if "==" in declared:
+        pinned = declared.split("==", 1)[1].strip()
+        if graphiti_ver_str != pinned:
+            warnings.warn(
+                "graphiti-core=%r does NOT match the declared pin %r in "
+                "pyproject.toml. The F7 hotfix rationale (module-level "
+                "graphiti_search accepts `config`; Graphiti.search does not) "
+                "was validated at 0.30.1 on 2026-09-16 and holds at this "
+                "version. Before bumping the pin, re-validate F7 and re-run "
+                "the search gold-set harness. See plan F7 follow-up note."
+                % (graphiti_ver_str, pinned),
+                UserWarning,
+                stacklevel=2,
+            )
+    else:
+        # Range / unpinned specifier: keep the historical drift signal.
+        parts = graphiti_ver_str.split(".")
+        major_minor = (int(parts[0]), int(parts[1]))
+        if major_minor != (0, 20):
+            warnings.warn(
+                "graphiti-core=%r drifted outside the plan F7 pin range 0.20.*, "
+                "and pyproject.toml declares %r (not an exact pin). The v0.4.7 "
+                "hotfix rationale (module-level graphiti_search vs "
+                "Graphiti.search with no search_config kwarg) was validated "
+                "against 0.20.x. Em 2026-09-16 live re-validation confirmed F7 "
+                "still holds at 0.30.1. Prefer an exact pin." % (graphiti_ver_str, declared),
+                UserWarning,
+                stacklevel=2,
+            )
 
 
 # ---------------------------------------------------------------------------
