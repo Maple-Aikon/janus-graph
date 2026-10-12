@@ -10,7 +10,7 @@ from typing import Optional, Union, cast
 from ..config import JanusSettings, load_config
 from ..core.contracts import Settings
 from .queue import EpisodeQueue, EpisodeRecord
-from .retry import send_to_dlq, should_retry
+from .retry import describe_exception, send_to_dlq, should_retry
 
 logger = logging.getLogger("janus_graph.pipeline.worker")
 
@@ -33,14 +33,14 @@ class EpisodeWorker:
         except asyncio.TimeoutError as err:
             logger.error("Episode %s timed out after %.1fs", record.id, timeout_sec)
             if should_retry(record, err):
-                await self.queue.mark_failed(record.id, f"TimeoutError: exceeded {timeout_sec}s")
+                await self.queue.mark_failed(record.id, describe_exception(err))
             else:
                 await send_to_dlq(self.queue, record, err)
             return False
         except Exception as err:
             logger.error("Failed to process episode %s: %s", record.id, err)
             if should_retry(record, err):
-                await self.queue.mark_failed(record.id, f"{type(err).__name__}: {err}")
+                await self.queue.mark_failed(record.id, describe_exception(err))
             else:
                 await send_to_dlq(self.queue, record, err)
             return False

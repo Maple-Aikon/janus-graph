@@ -48,8 +48,29 @@ def should_retry(record: EpisodeRecord, exc: BaseException, max_attempts: int = 
     return True
 
 
+def describe_exception(exc: BaseException) -> str:
+    """Render an exception as ``"ClassName: message"`` for storage.
+
+    Some exceptions carry no message at all - ``str(asyncio.TimeoutError())``
+    is the empty string - which used to write a bare ``"TimeoutError: "`` into
+    ``episodes.last_error`` / ``dead_letter.last_error``. Measured 2026-10-12:
+    130 DLQ rows were indistinguishable from each other because of it, so
+    there was no way to tell which episode died where or after how long.
+
+    A missing message is therefore rendered explicitly rather than silently
+    leaving a dangling colon. The class name is preserved, so replay class
+    filters that LIKE-match on it (``%timeout%``, ``%timeouterror%``) keep
+    working exactly as before.
+    """
+    name = type(exc).__name__
+    message = str(exc).strip()
+    if not message:
+        return f"{name}: <no message>"
+    return f"{name}: {message}"
+
+
 async def send_to_dlq(queue: EpisodeQueue, record: EpisodeRecord, exc: BaseException) -> None:
     """Mark record aborted and write into DLQ."""
-    error_msg = f"{type(exc).__name__}: {exc}"
+    error_msg = describe_exception(exc)
     await queue.mark_aborted(record.id, error_msg)
     logger.warning("Episode %s routed to DLQ: %s", record.id, error_msg)

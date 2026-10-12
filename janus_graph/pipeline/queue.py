@@ -286,6 +286,27 @@ class EpisodeQueue:
                     """,
                     (now, now, episode_id),
                 )
+                # An episode can only reach the DLQ via mark_aborted, and a
+                # later replay puts it back in the queue. When it finally
+                # succeeds, its dead_letter row is stale: leaving recovered_at
+                # NULL keeps it counted as "open" forever, which inflated
+                # dlq_open in /health to ~5x the real backlog (measured
+                # 2026-10-12: 272 of 341 "open" rows had status='done').
+                # recovered_at keeps its meaning - the row really was
+                # resolved - and recovered_attempts preserves the prior
+                # attempt count for forensics.
+                dlq_row = conn.execute(
+                    "SELECT attempt_count FROM dead_letter"
+                    " WHERE episode_id = ? AND recovered_at IS NULL",
+                    (episode_id,),
+                ).fetchone()
+                if dlq_row is not None:
+                    conn.execute(
+                        "UPDATE dead_letter"
+                        " SET recovered_at = ?, recovered_attempts = ?"
+                        " WHERE episode_id = ? AND recovered_at IS NULL",
+                        (now, dlq_row["attempt_count"], episode_id),
+                    )
                 conn.commit()
 
         async with self._write_lock:
@@ -534,10 +555,29 @@ class EpisodeQueue:
                 for row in rows:
                     ep_id = row["episode_id"]
                     prior_attempts = row["attempt_count"]
-                    conn.execute(
-                        "UPDATE episodes SET status = 'queued', attempt_count = 0, last_error = NULL, updated_at = ?, last_replay_at = ? WHERE id = ?",
+                    # Never requeue an episode that already succeeded. The
+                    # episode table is the authority on whether the work is
+                    # finished, not the dead_letter row - a replay that flips
+                    # a 'done' episode back to 'queued' re-ingests content
+                    # into the graph. measured 2026-10-12: mark_done now
+                    # closes the DLQ row, so this can only be reached by a
+                    # pre-existing stale row, but the guard is cheap.
+                    cur = conn.execute(
+                        "UPDATE episodes SET status = 'queued', attempt_count = 0,"
+                        " last_error = NULL, updated_at = ?, last_replay_at = ?"
+                        " WHERE id = ? AND status != 'done'",
                         (now, now, ep_id),
                     )
+                    if cur.rowcount == 0:
+                        # Episode is done (or gone): close the dead-letter row
+                        # so it stops being counted as open, but do not claim
+                        # it as replayed.
+                        conn.execute(
+                            "UPDATE dead_letter SET recovered_at = ?,"
+                            " recovered_attempts = ? WHERE episode_id = ?",
+                            (now, prior_attempts, ep_id),
+                        )
+                        continue
                     conn.execute(
                         "UPDATE dead_letter SET recovered_at = ?, recovered_attempts = ? WHERE episode_id = ?",
                         (now, prior_attempts, ep_id),
