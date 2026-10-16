@@ -294,8 +294,49 @@ async def search_memory(
         # changing which value reaches the gate.
         edges = cast(List[Any], getattr(search_results, "edges", search_results) or [])
 
+        # Reranker scores (2026-10-16). `SearchResults.edge_reranker_scores`
+        # is index-parallel with `edges` upstream — the vendor returns
+        # `reranked_edges[:limit], edge_scores[:limit]` together — so the
+        # naive `zip` looks right. It is not: the cosine gate below can DROP
+        # edges, shifting every later score onto the wrong row. So the two
+        # lists are joined by `edge.uuid` here, BEFORE the gate runs.
+        #
+        # A bare-list vendor build has no such attribute at all, hence the
+        # same getattr tolerance as `edges` above. An absent or short score
+        # list yields None per row rather than a fake 0.0: 0.0 is a
+        # legitimate-looking number that reads as "scored and terrible".
+        # ``reranker_name`` is the normalised value computed above and used to
+        # select the recipe, so diagnostics cannot report a different reranker
+        # than the one that actually ran.
+        raw_scores = getattr(search_results, "edge_reranker_scores", None)
+        scores_by_uuid: Dict[str, float] = {}
+        scores_available = False
+        if isinstance(raw_scores, (list, tuple)) and raw_scores:
+            # zip stops at the shorter list, so a short score list leaves the
+            # unmatched tail at None instead of shifting values onto the wrong
+            # rows. Equal lengths are NOT required to assign anything: the
+            # first N pairs are still positionally valid upstream.
+            for edge, score in zip(cast(List[Any], edges), raw_scores):
+                edge_uuid = getattr(edge, "uuid", None)
+                if isinstance(edge_uuid, str):
+                    scores_by_uuid[edge_uuid] = score
+            scores_available = bool(scores_by_uuid)
+        elif raw_scores is not None:
+            logger.debug(
+                "search: reranker scores had type %s, expected a list",
+                type(raw_scores).__name__,
+            )
+        else:
+            logger.debug(
+                "search: no reranker scores on the vendor result (type=%s)",
+                type(search_results).__name__,
+            )
+
+        edge_candidates = len(edges)
+        dropped_by_gate = 0
+
         if gate_min is not None:
-            edges = await _apply_cosine_gate(
+            gated = await _apply_cosine_gate(
                 edges,
                 query=query,
                 gate_min=gate_min,
@@ -303,15 +344,22 @@ async def search_memory(
                 graphiti=graphiti,
                 query_vector=query_vector,
             )
+            dropped_by_gate = edge_candidates - len(gated)
+            edges = gated
 
-        facts: list[Dict[str, str]] = []
+        facts: list[Dict[str, Any]] = []
         for edge in edges:
+            edge_uuid = getattr(edge, "uuid", None)
             facts.append(
                 {
                     "fact": getattr(edge, "fact", str(edge)),
                     "name": getattr(edge, "name", ""),
                     "valid_at": str(getattr(edge, "valid_at", "")),
                     "invalid_at": str(getattr(edge, "invalid_at", "")),
+                    "edge_uuid": edge_uuid if isinstance(edge_uuid, str) else None,
+                    "reranker_score": scores_by_uuid.get(edge_uuid)
+                    if isinstance(edge_uuid, str)
+                    else None,
                 }
             )
 
@@ -321,6 +369,25 @@ async def search_memory(
             "query": query,
             "count": len(facts),
             "results": facts,
+            "diagnostics": {
+                "reranker": reranker_name,
+                # Named, not "score": under RRF the vendor computes
+                # ``scores[uuid] += 1/(rank + 1)`` ACCUMULATED over every
+                # retrieval arm (search_utils.py:1770), so a value is always
+                # positive but can exceed 1 when an edge ranks highly in
+                # several arms (measured live 2026-10-16: 1.1428 = 1 + 1/7).
+                # It is a rank-fusion weight, NOT comparable to
+                # ``sim_min_score`` or any cosine threshold. Under MMR the
+                # same field is a relevance/redundancy MIXTURE (see
+                # _apply_cosine_gate docstring for the measured dead ends).
+                "score_semantics": "rrf_reciprocal_rank" if reranker_name == "rrf" else reranker_name,
+                "scores_available": scores_available,
+                # Always 0 in production: the cosine gate is OFF by decision
+                # (2026-10-05 measured every floor worse than OFF).
+                "scores_dropped_by_gate": dropped_by_gate,
+                "edge_candidates": edge_candidates,
+                "edge_returned": len(facts),
+            },
         }
     except Exception as e:  # noqa: BLE001 — preserve MCP wire contract
         # v0.5.0.1 fix #4: classify exception so the HTTP handler can

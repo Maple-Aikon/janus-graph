@@ -646,17 +646,150 @@ class EpisodeQueue:
             cur = conn.execute("SELECT COUNT(*) as count FROM episodes")
             return int(cur.fetchone()["count"])
 
-    def get_dlq_records(self, limit: int = 20) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _dlq_class_predicate(n: int) -> str:
+        """SQL fragment: match ANY of ``n`` bound classes, case-insensitively.
+
+        Kept as a ``@staticmethod`` because it reads nothing from the queue —
+        a module function called through ``self`` would suggest instance state
+        that does not exist.
+
+        ``instr(lower(last_error), lower(?)) > 0`` instead of
+        ``LIKE '%' || ? || '%'``: a caller-supplied ``_`` or ``%`` is a LIKE
+        wildcard, and ``LIKE '%_%'`` matches every non-empty error (measured
+        2026-10-16 on the live DB: 536/536 rows vs 375/536 for a literal
+        underscore). Shared by :meth:`get_dlq_records` and
+        :meth:`dlq_class_counts` so the two can never disagree on what a
+        class means.
+
+        The write path ``replay_dlq_batch`` keeps its ``LIKE`` predicate on
+        purpose — changing which rows a replay selects is out of scope here.
+        """
+        return "(" + " OR ".join(["instr(lower(last_error), lower(?)) > 0"] * n) + ")"
+
+    def get_dlq_records(
+        self,
+        limit: int = 20,
+        classes: Optional[List[str]] = None,
+        error_chars: Optional[int] = None,
+        open_only: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
+        """Read ``dead_letter`` rows, newest ``failed_at`` first (2026-10-16).
+
+        Every new argument defaults to "do not change the query", so
+        ``get_dlq_records(limit=n)`` keeps the pre-change behaviour
+        byte-for-byte: no WHERE clause, no truncation, recovered rows
+        included. The 6 existing call sites (``mcp/server.py``, ``cli/main.py``,
+        ``tests/test_queue*.py``, plus the ``list_dlq`` alias) keep working
+        untouched.
+
+        Args:
+            limit: Max rows to return.
+            classes: Substring match on ``last_error``, case-insensitive,
+                OR-ed together. See :func:`_dlq_class_predicate` for why this
+                is not ``LIKE``.
+            error_chars: Truncate ``last_error`` to this many chars plus an
+                ellipsis. ``None`` (default) and ``0`` both mean "no
+                truncation" — 0 is the documented off-switch for the MCP tool,
+                None is the API default that preserves existing output.
+            open_only: ``True`` restricts to ``recovered_at IS NULL`` (the
+                same predicate ``get_stats()['dlq']`` uses, so the counts
+                cannot disagree). ``False`` selects only recovered rows.
+                ``None`` (default) does not filter at all.
+        """
+        where_parts: List[str] = []
+        params: List[Any] = []
+        if open_only is not None:
+            where_parts.append("recovered_at IS NULL" if open_only else "recovered_at IS NOT NULL")
+        if classes:
+            # Parens matter: without them an OR would escape the open_only
+            # term and select recovered rows too.
+            where_parts.append(self._dlq_class_predicate(len(classes)))
+            params.extend(classes)
+        where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
         with self._get_connection() as conn:
             cur = conn.execute(
-                """
+                f"""
                 SELECT episode_id, payload_json, last_error, attempt_count, failed_at, recovered_at
                 FROM dead_letter
+                {where_sql}
                 ORDER BY failed_at DESC
                 LIMIT ?
                 """,
-                (limit,),
+                params + [limit],
             )
-            return [dict(row) for row in cur.fetchall()]
+            rows = [dict(row) for row in cur.fetchall()]
+
+        if error_chars and error_chars > 0:
+            for row in rows:
+                err = row.get("last_error")
+                if err and len(err) > error_chars:
+                    row["last_error"] = err[:error_chars] + "…"
+        return rows
+
+    def dlq_class_counts(self, classes: Optional[List[str]]) -> Dict[str, int]:
+        """Count OPEN dead-letter rows per class (2026-10-16).
+
+        Single source of truth for the per-class breakdown: it reads the same
+        ``recovered_at IS NULL`` predicate as :meth:`get_stats` and the same
+        match predicate as :meth:`get_dlq_records`, so ``by_class`` cannot
+        drift away from either the open total or the rows the filter returns.
+
+        A row matching TWO classes counts in both — the counts are a
+        breakdown of independent predicates, not a partition. Callers that
+        need them to add up must compare the union against
+        ``get_stats()['dlq']``; on the live DLQ the two taxonomy classes in
+        ``config.yaml`` overlap on 0 rows (measured 2026-10-16), so they do
+        add up there.
+
+        Every requested class gets a key, value 0 when absent — a missing key
+        is indistinguishable from a class nobody asked about, and a caller
+        rendering a table needs both.
+
+        Args:
+            classes: Taxonomy to count against. ``None`` or ``[]`` returns
+                ``{}``: with no taxonomy there is nothing to count, and
+                returning "every row is unclassified" here would be a
+                different claim than "the taxonomy matched nothing".
+        """
+        if not classes:
+            return {}
+        counts: Dict[str, int] = {}
+        with self._get_connection() as conn:
+            for cls in classes:
+                cur = conn.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM dead_letter
+                    WHERE recovered_at IS NULL
+                      AND instr(lower(last_error), lower(?)) > 0
+                    """,
+                    (cls,),
+                )
+                counts[cls] = int(cur.fetchone()["count"])
+        return counts
+
+    def dlq_class_union_count(self, classes: Optional[List[str]]) -> int:
+        """Count OPEN rows matching ANY of ``classes`` (2026-10-16).
+
+        Distinct from summing :meth:`dlq_class_counts`: that double-counts a
+        row whose error matches two classes, because the per-class counts are
+        independent predicates rather than a partition. ``unclassified`` needs
+        this number, not the sum.
+        """
+        if not classes:
+            return 0
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                f"""
+                SELECT COUNT(*) AS count
+                FROM dead_letter
+                WHERE recovered_at IS NULL
+                  AND {self._dlq_class_predicate(len(classes))}
+                """,
+                list(classes),
+            )
+            return int(cur.fetchone()["count"])
 
     list_dlq = get_dlq_records

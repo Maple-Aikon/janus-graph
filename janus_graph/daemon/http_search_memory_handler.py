@@ -390,6 +390,19 @@ async def search_memory_handler(request: web.Request) -> web.Response:
         "query": result.get("query", query),
         "count": result.get("count", 0),
         "results": result.get("results", []),
+        # v0.7.2: the engine's `diagnostics` block (which reranker ran, what
+        # the score semantics are, whether scores existed, how many
+        # candidates the cosine gate dropped). Without this line the field
+        # exists and is correct on the MCP stdio path — the MCP tool returns
+        # the engine dict whole — but is invisible to every HTTP client,
+        # because this handler rebuilds its payload key-by-key and silently
+        # drops anything it does not name. See Test K in
+        # tests/test_http_search_memory_handler.py.
+        #
+        # `or {}` (not `.get(..., {})`) also normalises an explicit `None`
+        # from a mixed-version engine, so the key is always present and always
+        # a dict: clients branch on shape, not on presence.
+        "diagnostics": result.get("diagnostics") or {},
         "elapsed_ms": elapsed_ms,
         # v0.5.0.1 fix #5: degraded is always False in v0.5.0. Falkor
         # disconnect is REJECTED at the handler with 503 before this

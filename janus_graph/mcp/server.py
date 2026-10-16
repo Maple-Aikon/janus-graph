@@ -7,7 +7,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # graphiti-core: import SearchConfig recipe + SearchFilters/DateFilter for
 # the MCP `search_memory` tool (v0.4.5: parity with hook Falkor path).
@@ -52,6 +52,48 @@ def is_read_only_cypher(query: str) -> tuple[bool, Optional[str]]:
         if re.search(rf"\b{kw}\b", query, re.IGNORECASE):
             return False, kw
     return True, None
+
+
+def _dlq_breakdown(
+    queue: EpisodeQueue,
+    cfg: JanusSettings,
+    stats: Dict[str, int],
+) -> Dict[str, Any]:
+    """Build the ``graphiti_health`` DLQ block (2026-10-16).
+
+    Args:
+        queue: Open DLQ rows are counted by the queue's own methods, so the
+            predicates here are the ones production uses — not a second copy.
+        cfg: Source of the taxonomy, ``pipeline.dlq_replay.classes``.
+        stats: The already-computed ``get_stats()`` dict, reused so ``open``
+            is the identical number ``queue_stats['dlq']`` reports instead of
+            a second COUNT that could disagree with it.
+
+    Returns:
+        ``{"open": int}`` always, plus ``by_class``/``unclassified`` when a
+        taxonomy exists. With no taxonomy the breakdown is omitted rather than
+        reporting every row as unclassified — "not classified" and "no
+        taxonomy to classify against" are different claims.
+
+    ``unclassified`` counts open rows matching no class. A row matching two
+    classes counts in both, so ``by_class`` is a set of independent
+    predicates, not a partition; the caller can check that its union plus
+    ``unclassified`` reaches ``open``.
+    """
+    taxonomy = list(cfg.pipeline.dlq_replay.classes or [])
+    out: Dict[str, Any] = {"open": int(stats.get("dlq", 0))}
+    if not taxonomy:
+        return out
+
+    by_class = queue.dlq_class_counts(taxonomy)
+    out["by_class"] = by_class
+    # A row matching two classes counts in both, so the by_class values need
+    # not add up to ``open``. Count the union directly in SQL rather than
+    # summing per class (which over-counts overlaps) or fetching every open row
+    # into Python just to call len() on it.
+    matched = queue.dlq_class_union_count(taxonomy)
+    out["unclassified"] = max(out["open"] - matched, 0)
+    return out
 
 
 def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
@@ -107,8 +149,30 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
         }
 
     @mcp.tool()
-    async def queue_status(episode_id: Optional[str] = None, limit: int = 20) -> Dict[str, Any]:
-        """Inspect the episode queue status, specific record, or dead-letter rows."""
+    async def queue_status(
+        episode_id: Optional[str] = None,
+        limit: int = 20,
+        classes: Optional[List[str]] = None,
+        error_chars: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Inspect the episode queue status, specific record, or dead-letter rows.
+
+        ``dlq_recent`` lists OPEN dead-letter rows only (``recovered_at IS
+        NULL``) — the same population ``stats.dlq`` counts. Before 2026-10-16
+        this response mixed two populations: ``stats.dlq`` counted open rows
+        while ``dlq_recent`` listed every row ever dead-lettered, recovered
+        ones included, so "the last 20 errors" mostly showed errors that were
+        already fixed. Pass ``open_only=False`` to get the old behaviour.
+
+        Args:
+            episode_id: Show one episode instead of the DLQ listing.
+            limit: Max rows in ``dlq_recent``.
+            classes: Substring filter on the error, case-insensitive, OR-ed.
+                ``_`` and ``%`` are literal here, not SQL wildcards.
+            error_chars: Truncate ``last_error`` to this many chars (plus an
+                ellipsis). Omit or pass 0 to keep the full text — the longest
+                row on the live DLQ is 2012 chars.
+        """
         stats = queue.get_stats()
         out: Dict[str, Any] = {
             "stats": stats,
@@ -129,7 +193,12 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
                     "updated_at": rec.updated_at,
                 }
         else:
-            dlq_records = queue.get_dlq_records(limit=limit)
+            dlq_records = queue.get_dlq_records(
+                limit=limit,
+                classes=classes,
+                error_chars=error_chars,
+                open_only=True,
+            )
             out["dlq_recent"] = [
                 {
                     "id": r.get("episode_id"),
@@ -160,7 +229,14 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
 
     @mcp.tool()
     async def graphiti_health() -> Dict[str, Any]:
-        """Composite health snapshot: queue stats, DLQ counts, and engine reachability."""
+        """Composite health snapshot: queue stats, DLQ counts, and engine reachability.
+
+        The ``dlq`` block breaks down the SAME rows ``queue_stats['dlq']``
+        counts — both read ``recovered_at IS NULL`` — so the two numbers can
+        never describe different populations. The taxonomy is
+        ``pipeline.dlq_replay.classes``, the same list that decides what a
+        replay picks up, so there is no second drifting list here.
+        """
         stats = queue.get_stats()
         engine_ok = False
         try:
@@ -176,6 +252,7 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
             "version": __version__,
             "engine_reachable": engine_ok,
             "queue_stats": stats,
+            "dlq": _dlq_breakdown(queue, cfg, stats),
         }
 
     @mcp.tool()

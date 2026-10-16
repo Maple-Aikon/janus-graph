@@ -687,3 +687,165 @@ def test_httpsettings_default_host_is_loopback():
         "F4: HTTPSettings.host default must be loopback. "
         "Changing to 0.0.0.0 exposes the daemon to the network."
     )
+# ─── Test K (2026-10-16): diagnostics reaches the HTTP surface ────────────
+#
+# The engine facade (``engine/search_memory.py``) returns a ``diagnostics``
+# block describing HOW the results were ranked: which reranker ran, what the
+# score semantics are, whether scores existed at all, and how many candidates
+# the cosine gate dropped. The MCP stdio tool returns the engine dict whole,
+# so it already carries ``diagnostics`` — but the HTTP handler rebuilds its
+# payload key-by-key (see ``http_search_memory_handler.py`` L387-403), which
+# DROPS any key it does not name explicitly.
+#
+# That silent drop is the bug class these tests pin: a field can exist, be
+# correct, be covered by tests at the engine layer, and still be invisible to
+# every HTTP client. Test H (response parity with MCP) asserted the 5 MCP keys
+# are present but never asserted the reverse direction — that nothing the MCP
+# tool exposes is missing from HTTP. Hence these.
+
+
+def _engine_payload(**overrides):
+    """Engine response shape as of v0.7.2 (rank scores + diagnostics)."""
+    payload = {
+        "success": True,
+        "group_id": "graphiti_memory",
+        "query": "Thuy Vi",
+        "count": 1,
+        "results": [
+            {
+                "fact": "Thúy Vi is co-host at An Hiên Homestay",
+                "name": "Thúy Vi",
+                "valid_at": "",
+                "invalid_at": "",
+                "edge_uuid": "edge-1",
+                "reranker_score": 1.1428,
+            }
+        ],
+        "diagnostics": {
+            "reranker": "rrf",
+            "score_semantics": "rrf_reciprocal_rank",
+            "scores_available": True,
+            "scores_dropped_by_gate": 0,
+            "edge_candidates": 1,
+            "edge_returned": 1,
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_http_payload_exposes_diagnostics(base_settings, alive_supervisor, mock_graphiti):
+    """diagnostics must survive the handler's explicit payload rebuild.
+
+    RED until the handler names ``diagnostics`` in its payload dict.
+    """
+    ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
+    engine_response = _engine_payload()
+    with patch(
+        "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
+        new=AsyncMock(return_value=engine_response),
+    ):
+        req = _make_request(ctx, "query=Thuy%20Vi")
+        resp = await search_memory_handler(req)
+    body = json.loads(resp.text)
+
+    assert "diagnostics" in body, (
+        "engine returned a diagnostics block but the HTTP payload dropped it — "
+        "every HTTP client loses visibility into HOW results were ranked"
+    )
+    assert body["diagnostics"] == engine_response["diagnostics"], (
+        "handler must pass diagnostics through VERBATIM, not re-derive or "
+        "truncate it; a rewritten copy would drift from the engine's truth"
+    )
+
+
+@pytest.mark.asyncio
+async def test_http_diagnostics_has_all_engine_fields(
+    base_settings, alive_supervisor, mock_graphiti
+):
+    """All 6 diagnostics fields must survive, not just the container key.
+
+    A handler that does ``result.get("diagnostics", {})[:2]`` or maps a
+    subset would pass the test above only if the subset happened to equal the
+    full dict — pinning each field name closes that hole.
+    """
+    ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
+    with patch(
+        "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
+        new=AsyncMock(return_value=_engine_payload()),
+    ):
+        req = _make_request(ctx, "query=Thuy%20Vi")
+        resp = await search_memory_handler(req)
+    body = json.loads(resp.text)
+
+    for key in (
+        "reranker",
+        "score_semantics",
+        "scores_available",
+        "scores_dropped_by_gate",
+        "edge_candidates",
+        "edge_returned",
+    ):
+        assert key in body["diagnostics"], f"diagnostics field {key!r} dropped by the HTTP layer"
+
+
+@pytest.mark.asyncio
+async def test_http_row_carries_reranker_score_and_edge_uuid(
+    base_settings, alive_supervisor, mock_graphiti
+):
+    """Each result row must expose ``reranker_score`` + ``edge_uuid`` on HTTP.
+
+    These ride the SAME trap as diagnostics — the handler copies the ``results``
+    list wholesale, which happens to preserve them today. This test is a
+    tripwire: it goes RED if anyone "optimises" the row copy into an explicit
+    key-by-key rebuild that names only the original 4 fields.
+    """
+    ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
+    with patch(
+        "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
+        new=AsyncMock(return_value=_engine_payload()),
+    ):
+        req = _make_request(ctx, "query=Thuy%20Vi")
+        resp = await search_memory_handler(req)
+    body = json.loads(resp.text)
+
+    assert len(body["results"]) == 1
+    row = body["results"][0]
+    assert row["reranker_score"] == 1.1428, "rank score lost on the HTTP surface"
+    assert row["edge_uuid"] == "edge-1", "edge uuid lost on the HTTP surface"
+    # The 4 pre-v0.7.2 keys must be untouched (backward compat).
+    for key in ("fact", "name", "valid_at", "invalid_at"):
+        assert key in row
+
+
+@pytest.mark.asyncio
+async def test_http_diagnostics_defaults_empty_when_engine_omits_it(
+    base_settings, alive_supervisor, mock_graphiti
+):
+    """An engine WITHOUT diagnostics (older daemon / mixed-version) must not 500.
+
+    ``.get("diagnostics")`` returning ``None`` is a valid response; the handler
+    must not subscript it. The key is present but empty so HTTP clients see a
+    STABLE shape — a client branching on key presence must not need to handle
+    "sometimes absent".
+    """
+    ctx = _make_ctx(base_settings, alive_supervisor, mock_graphiti)
+    legacy = {
+        "success": True,
+        "group_id": "graphiti_memory",
+        "query": "Thuy Vi",
+        "count": 0,
+        "results": [],
+    }
+    with patch(
+        "janus_graph.daemon.http_search_memory_handler.engine_search_memory",
+        new=AsyncMock(return_value=legacy),
+    ):
+        req = _make_request(ctx, "query=Thuy%20Vi")
+        resp = await search_memory_handler(req)
+
+    assert resp.status == 200, f"legacy engine response must stay 200, got {resp.status}"
+    body = json.loads(resp.text)
+    assert body["diagnostics"] == {}, "absent engine diagnostics must map to {}, not None"
+    assert body["success"] is True
