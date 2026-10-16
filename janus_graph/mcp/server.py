@@ -24,6 +24,7 @@ from graphiti_core.search.search_filters import (  # noqa: F401
 )
 from mcp.server.mcpserver import MCPServer
 
+from .. import __version__
 from ..config import JanusSettings, load_config
 from ..engine.search_memory import search_memory as _engine_search_memory
 from ..pipeline.dream import run_dream_consolidation
@@ -172,7 +173,7 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
         status = "ok" if (engine_ok and stats.get("dlq", 0) == 0) else "degraded"
         return {
             "status": status,
-            "version": "0.1.0",
+            "version": __version__,
             "engine_reachable": engine_ok,
             "queue_stats": stats,
         }

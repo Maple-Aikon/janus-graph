@@ -1,6 +1,6 @@
 [project]
 name = "janus-graph"
-version = "0.1.0"
+version = "0.7.2"
 description = "Modular, Resilient Knowledge Graph Memory Engine for AI Agents"
 readme = "README.md"
 license = { text = "Apache-2.0" }

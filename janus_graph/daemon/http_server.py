@@ -62,7 +62,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("janus_graph.daemon.http_server")
 
-__version__ = "0.5.0"
+# Version comes from the pyproject SoT (see janus_graph/__init__.py). This module
+# used to carry its own literal, which is why /health reported 0.5.0 while the
+# MCP tool and package __version__ reported 0.1.0.
+from .. import __version__  # noqa: E402  (after logger, matches existing layout)
 
 
 def build_app(ctx: "DaemonContext") -> web.Application:
