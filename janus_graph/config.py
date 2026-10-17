@@ -515,7 +515,39 @@ class FalkorRestartPolicySettings(BaseModel):
 
 
 class HTTPSettings(BaseModel):
-    """aiohttp HTTP server bind settings (Phase 2 PR scope)."""
+    """aiohttp HTTP server bind settings (Phase 2 PR scope).
+
+    SECURITY INVARIANT — ``host`` MUST stay loopback.
+
+    None of these routes authenticate the caller: ``POST /shutdown`` sets the
+    shutdown event unconditionally (``http_server.shutdown_handler``), so any
+    client that can reach this socket can stop the daemon. Binding to
+    ``127.0.0.1`` is therefore the *only* thing keeping that endpoint
+    unreachable off-box, and it is the whole mitigation — not a default we
+    merely prefer.
+
+    Do not bind ``0.0.0.0`` (or any routable address) without first adding
+    caller authentication. Reviewed 2026-10-17: the two `bearer`/`api_key`
+    occurrences under ``janus_graph/daemon/`` are outbound EmbeddingClient
+    credentials, not inbound auth, so there is no auth layer to inherit.
+    ``report.sinks.webhook.secret_token`` is likewise outbound-only — it signs
+    requests janus *sends*, and is never read on the inbound path.
+
+    CAUTION — this class default is NOT the only source of the bind address.
+    ``config.example.yaml`` (the last-resort YAML seed resolved by
+    ``_resolve_default_yaml_file`` when no operator config exists) also sets
+    ``daemon.http.host: "127.0.0.1"`` explicitly. Measured 2026-10-17 by
+    mutating this default to ``0.0.0.0``: a bare ``HTTPSettings()`` then
+    reports ``0.0.0.0``, but ``JanusSettings(...).daemon.http.host`` still
+    reports ``127.0.0.1`` — the YAML shadows the field default on the path the
+    daemon actually takes. So ``test_boot_wires_http_site_on_configured_host``
+    stays green on a changed default and is NOT a guard rail; it only proves
+    ``boot`` passes through whatever the resolved config says.
+
+    To change the bind address, change ``daemon.http.host`` in the operator's
+    ``$JANUS_GRAPH_HOME/config.yaml`` (or ``JANUS_CONFIG_PATH``), and verify by
+    reading the resolved ``JanusSettings`` value — never by editing this default.
+    """
 
     host: str = "127.0.0.1"
     port: int = 8765
