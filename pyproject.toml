@@ -33,6 +33,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-mock>=3.12",
+    "pytest-cov>=5.0",  # CI gates on --cov-fail-under; see [tool.coverage] below
     "ruff==0.16.5",  # pinned: ruff format output changes between minors, CI gates on it
     "mypy==2.4.0",  # pinned: new mypy minors add error codes and can turn a green gate red
 ]
@@ -179,3 +180,33 @@ ignore_missing_imports = true
 # !! measured) — is unchanged.
 # !!
 # !! Do NOT re-add these modules to silence a new error — they are gated again.
+[tool.coverage.run]
+branch = true
+source = ["janus_graph"]
+# The test tree is excluded deliberately: a test file's own helpers and
+# fixtures count as statements, so including them inflates the denominator
+# with lines that are executed by definition.
+omit = [
+    "*/__main__.py",
+    "janus_graph/cli/main.py",  # thin argparse wrapper over cli.commands
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# CI reads this via `pytest --cov --cov-fail-under=0` + an explicit gate step,
+# NOT automatically, so that raising the floor stays a deliberate act.
+fail_under = 0
+
+# Emphatic dunder bodies and decorator boilerplate are declarative, not logic.
+# NOTE: `exclude_lines` takes a FLAT list -- nesting `exclude_also` inside
+# `[tool.coverage.report]` as a dict raises ConfigError at coverage start
+# ("Option [tool.coverage.report]exclude_also is not a list"). tomllib happily
+# parses the wrong shape, so only running pytest-cov reveals it.
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    "@web\\.middleware",
+]

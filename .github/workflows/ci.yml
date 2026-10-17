@@ -43,6 +43,22 @@ jobs:
         run: |
           uv run pytest -v
 
+      - name: Run Coverage Gate
+        # Floor is 80, measured baseline is 85 (2026-10-17, Python 3.12,
+        # 727 tests). The 5-point headroom is deliberate: coverage on 3.13 and
+        # on ubuntu differs by a percent or two from the number measured on
+        # Maple's arm64 box, and a gate that red-flags on ±1% teaches people
+        # to ignore it.
+        #
+        # `pyproject.toml` keeps `fail_under = 0` so that raising this floor
+        # stays a deliberate, reviewed edit to ci.yml rather than something a
+        # dependency bump can change underneath us.
+        #
+        # Read the number as a regression alarm, not a quality score: it says
+        # nothing about whether the covered lines are correct.
+        run: |
+          uv run pytest --cov --cov-fail-under=80 --cov-report=term-missing -q
+
   build-cross-arch:
     name: FalkorDB Cross-Arch Build (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
