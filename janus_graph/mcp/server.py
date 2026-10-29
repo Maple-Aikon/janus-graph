@@ -158,11 +158,20 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
         """Inspect the episode queue status, specific record, or dead-letter rows.
 
         ``dlq_recent`` lists OPEN dead-letter rows only (``recovered_at IS
-        NULL``) — the same population ``stats.dlq`` counts. Before 2026-10-16
-        this response mixed two populations: ``stats.dlq`` counted open rows
+        NULL``) — the same population ``stats.dlq`` counts, so the two
+        numbers can never describe different sets. Before 2026-10-16 this
+        response mixed two populations: ``stats.dlq`` counted open rows
         while ``dlq_recent`` listed every row ever dead-lettered, recovered
         ones included, so "the last 20 errors" mostly showed errors that were
-        already fixed. Pass ``open_only=False`` to get the old behaviour.
+        already fixed.
+
+        NOTE: this tool has NO ``open_only`` parameter. The open-only
+        listing is not an option here — it is the only behaviour this tool
+        has. (The underlying ``EpisodeQueue.get_dlq_records`` does take
+        ``open_only``, where ``False`` means "recovered rows only" — NOT
+        "the old mixed behaviour" — and ``None`` means "no filter at all".
+        Do not pass ``open_only=False`` here expecting the pre-2026-10-16
+        mixed listing; it does not exist at this level.)
 
         Args:
             episode_id: Show one episode instead of the DLQ listing.
