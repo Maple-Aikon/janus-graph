@@ -43,7 +43,14 @@ def create_graphiti_instance(settings: Optional[JanusSettings] = None) -> Any:
             max_tokens=cfg.graphiti.llm.max_tokens,
         ),
         cache=False,
-        structured_output_mode="json_object",  # LiteLLM proxy: schema-injected mode
+        # LiteLLM proxy at :4000 accepts native json_schema (verified 10-23:
+        # gemini-3.5-flash-lite 200 with the real Graphiti CombinedExtraction
+        # schema, and ~5x faster than the json_object path). In json_schema
+        # mode the API enforces the schema, so graphiti_core does NOT inject it
+        # into the prompt. The previous json_object mode relied on prompt
+        # injection, which several free-tier models answered by echoing the
+        # schema back instead of extracting entities.
+        structured_output_mode="json_schema",
     )
 
     llm_client = SchemaRepairingLLMClient(

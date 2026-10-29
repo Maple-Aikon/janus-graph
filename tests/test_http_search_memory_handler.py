@@ -687,6 +687,8 @@ def test_httpsettings_default_host_is_loopback():
         "F4: HTTPSettings.host default must be loopback. "
         "Changing to 0.0.0.0 exposes the daemon to the network."
     )
+
+
 # ─── Test K (2026-10-16): diagnostics reaches the HTTP surface ────────────
 #
 # The engine facade (``engine/search_memory.py``) returns a ``diagnostics``

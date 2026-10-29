@@ -176,6 +176,68 @@ class DlqReplayConfig(BaseModel):
     min_age_sec: int = 60  # don't replay rows that just landed in DLQ
 
 
+class RetryPolicyConfig(BaseModel):
+    """SHARED retry policy for every path that requeues an episode.
+
+    One policy, three write paths. Before this section the three paths
+    disagreed and each had its own blind spot (measured 2026-10-23):
+
+      * ``reap_failed_or_aborted`` (dream phase 4) — no class filter at all,
+        so it requeued permanent upstream faults every night.
+      * ``replay_dlq_batch`` (dream phase 4) — a narrow ALLOWLIST
+        (``dlq_replay.classes``) that starved every transient class it did
+        not name.
+      * ``replay_dlq_episode`` (CLI + MCP, manual) — no filter at all, and it
+        reset ``attempt_count`` to 0, so a manual retry could re-arm a
+        permanent fault and make the cycle repeatable by hand.
+
+    The policy is a DENYLIST on measured PERMANENT upstream codes, not an
+    allowlist of error classes. An allowlist silently starves every transient
+    class it does not name, and that set is unbounded (today:
+    ``ConnectionError``, ``InternalServerError``, ``TimeoutError``; tomorrow:
+    something new). A denylist fails SAFE: an unknown error is retried, and an
+    unknown *permanent* error costs one wasted round before it lands in the
+    DLQ where ``dlq_open`` surfaces it. The permanent set is observable, so
+    the denylist can be corrected when a new permanent class appears.
+
+    Measured 2026-10-23 08:05 against the live backlog (5,328 failed/aborted
+    rows):
+      - ``Error code: 404`` x1062 (NotFoundError - the ``free-ais`` group has
+        no fallback model group, so the upstream model does not exist)
+      - ``Error code: 402`` x940  (APIStatusError - upstream budget exhausted)
+
+    Matching is case-insensitive substring matching on the stored
+    ``last_error`` text. The predicates are written NULL-safe (``last_error IS
+    NULL OR ... NOT LIKE``) because a plain ``NOT LIKE`` evaluates to NULL for
+    a NULL column and would silently EXCLUDE rows the policy cannot
+    classify — the plan's own rule is "a row with no ``last_error`` IS
+    requeued; do not drop rows you cannot classify".
+    """
+
+    # Rows whose failure is a PERMANENT upstream fault. Never re-queued, by
+    # ANY path. Matched case-insensitively as a substring of the stored
+    # error text.
+    permanent_error_codes: List[str] = Field(
+        default_factory=lambda: ["Error code: 404", "Error code: 402"]
+    )
+
+    # Optional explicit allowlist. When non-empty it wins over the denylist;
+    # empty means "everything except the permanent codes".
+    allowed_error_codes: List[str] = Field(default_factory=list)
+
+    # Rows requeued per nightly reap run. Sized against MEASURED spare
+    # capacity (234 claim slots/day over 7 days; 274 over the last 3 days),
+    # not the nominal 576. 24 rows = 6 drain ticks' worth, and it is
+    # deliberately BELOW the pool's own growth rate (~50 rows/day) - the
+    # reaper controls fairness of turns, not the backlog size.
+    reap_limit: int = 24
+
+    # Do not requeue rows that already exhausted their attempts. ``max_attempts``
+    # is 3, and 60 of the 100 rows the reaper was picking every night had
+    # ``attempt_count >= 3``.
+    respect_attempt_ceiling: bool = True
+
+
 class PipelineConfig(BaseModel):
     """Pipeline and queue settings."""
 
@@ -187,6 +249,7 @@ class PipelineConfig(BaseModel):
     drain_batch_size: int = 50
     dream: DreamConfig = Field(default_factory=DreamConfig)
     dlq_replay: DlqReplayConfig = Field(default_factory=DlqReplayConfig)
+    retry_policy: RetryPolicyConfig = Field(default_factory=RetryPolicyConfig)
 
 
 class HeuristicsConfig(BaseModel):

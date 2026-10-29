@@ -143,6 +143,12 @@ async def health_handler(request: web.Request) -> web.Response:
         # T9 invariant: additive field — old clients ignoring this still get
         # a 200/503 + circuit + queue_stats as before.
         "restart_policy": _restart_policy_payload(ctx),
+        # T4 (2026-10-23): the cron/dream state. ``CronLoop.snapshot()``
+        # already existed (cron_loop.py) but was NEVER called by the health
+        # handler — so the operator had to read a JSONL log to learn whether
+        # the nightly run happened at all. ``cron_loop`` is Optional
+        # (lifespan.py) and absent when cron is disabled, so it is guarded.
+        "cron": _cron_payload(ctx),
         "daemon_version": __version__,
         "queue_stats": queue_stats,
     }
@@ -150,6 +156,37 @@ async def health_handler(request: web.Request) -> web.Response:
     # Degraded → 503 with same body (operationally useful — clients see state).
     status_code = 200 if falkor_ok else 503
     return web.json_response(payload, status=status_code)
+
+
+def _cron_payload(ctx: "DaemonContext") -> dict:
+    """T4 (2026-10-23): serialise the cron/dream state for /health.
+
+    ``CronLoop.snapshot()`` already existed (cron_loop.py) but was never
+    called by the health handler, so the operator had to read a JSONL log to
+    learn whether the nightly run happened at all.
+
+    ``ctx.cron_loop`` is Optional (lifespan.py:92) and is ``None`` when
+    cron is disabled, so the guard is required, not defensive noise.
+
+    The snapshot's ``last_sweep_at`` / ``last_dream_at`` are MONOTONIC
+    seconds — uninterpretable on their own and incomparable across a daemon
+    restart. The ``*_iso`` fields carry the UTC wall clock, which is the
+    number an operator can actually read. Both are exposed.
+
+    A failing snapshot must not turn /health into a 500: the handler's
+    contract is "200 when Falkor alive, 503 when degraded", so a broken
+    cron snapshot degrades to an error field, never to an exception.
+    """
+    cron_loop = getattr(ctx, "cron_loop", None)
+    if cron_loop is None:
+        return {"enabled": False, "running": False, "available": False}
+    try:
+        snap = cron_loop.snapshot()
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("cron snapshot error: %s", exc)
+        return {"enabled": None, "running": None, "available": False, "error": str(exc)}
+    snap["available"] = True
+    return snap
 
 
 def _restart_policy_payload(ctx: "DaemonContext") -> dict:

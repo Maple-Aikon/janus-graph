@@ -28,7 +28,7 @@ from .. import __version__
 from ..config import JanusSettings, load_config
 from ..engine.search_memory import search_memory as _engine_search_memory
 from ..pipeline.dream import run_dream_consolidation
-from ..pipeline.queue import EpisodeQueue
+from ..pipeline.queue import EpisodeQueue, RetryPolicy
 
 logger = logging.getLogger("janus_graph.mcp")
 
@@ -213,9 +213,24 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
 
     @mcp.tool()
     async def retry_dlq_episode(episode_id: str) -> Dict[str, Any]:
-        """Manually replay a dead-letter episode back to queued status."""
-        success = await queue.replay_dlq_episode(episode_id)
+        """Manually replay a dead-letter episode back to queued status.
+
+        The SHARED retry policy applies here too (2026-10-23): a manual
+        retry must not be able to re-arm a permanent upstream fault (404/402)
+        that the automatic paths refuse. A refused row is reported with the
+        offending code named, so the operator knows it is inert.
+        """
+        policy = RetryPolicy.from_settings(cfg)
+        success = await queue.replay_dlq_episode(episode_id, policy=policy)
         if not success:
+            refusal = queue.dlq_refusal_reason(episode_id, policy)
+            if refusal:
+                return {
+                    "success": False,
+                    "episode_id": episode_id,
+                    "refused_by_policy": True,
+                    "message": refusal,
+                }
             return {
                 "success": False,
                 "episode_id": episode_id,

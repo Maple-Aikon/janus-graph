@@ -380,7 +380,9 @@ async def search_memory(
                 # ``sim_min_score`` or any cosine threshold. Under MMR the
                 # same field is a relevance/redundancy MIXTURE (see
                 # _apply_cosine_gate docstring for the measured dead ends).
-                "score_semantics": "rrf_reciprocal_rank" if reranker_name == "rrf" else reranker_name,
+                "score_semantics": "rrf_reciprocal_rank"
+                if reranker_name == "rrf"
+                else reranker_name,
                 "scores_available": scores_available,
                 # Always 0 in production: the cosine gate is OFF by decision
                 # (2026-10-05 measured every floor worse than OFF).

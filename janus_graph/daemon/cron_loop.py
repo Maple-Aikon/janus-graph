@@ -81,6 +81,14 @@ class CronLoop:
         self.last_sweep_stats: Optional[dict] = None
         self.last_dream_at: Optional[float] = None
         self.last_dream_result: Optional[dict] = None
+        # Wall-clock counterparts. ``last_sweep_at`` / ``last_dream_at`` are
+        # MONOTONIC seconds (``asyncio.get_event_loop().time()``) — they are
+        # only meaningful as a DELTA inside one process lifetime and cannot
+        # be compared across a daemon restart. Surfacing them raw in
+        # /health made the field uninterpretable, so the ISO-8601 UTC
+        # timestamps are recorded alongside (2026-10-23, defect B6).
+        self.last_sweep_at_iso: Optional[str] = None
+        self.last_dream_at_iso: Optional[str] = None
         self.tick_count: int = 0
         self.skipped_circuit_open: int = 0
 
@@ -161,6 +169,7 @@ class CronLoop:
                 try:
                     stats = await run_cron_sweep(self._settings)
                     self.last_sweep_at = asyncio.get_event_loop().time()
+                    self.last_sweep_at_iso = datetime.now(timezone.utc).isoformat()
                     self.last_sweep_stats = stats
                     self.tick_count += 1
                     logger.info(
@@ -213,6 +222,7 @@ class CronLoop:
                     try:
                         result = await run_dream_consolidation(self._settings)
                         self.last_dream_at = asyncio.get_event_loop().time()
+                        self.last_dream_at_iso = datetime.now(timezone.utc).isoformat()
                         self.last_dream_result = result
                         last_run_date = utc_date
                         logger.info(
@@ -232,15 +242,25 @@ class CronLoop:
     # ─── observability ──────────────────────────────────────────────────
 
     def snapshot(self) -> dict:
-        """State snapshot for /health body extension (Phase 4 observability)."""
+        """State snapshot for /health body extension (Phase 4 observability).
+
+        ``last_sweep_at`` / ``last_dream_at`` are MONOTONIC seconds — only
+        meaningful as a delta within one process lifetime. The ``*_iso``
+        fields carry the UTC wall-clock timestamp, which IS comparable across
+        restarts. Both are exposed: dropping the monotonic pair would break
+        any existing consumer, and dropping the ISO pair would leave the
+        operator with an uninterpretable number (2026-10-23, defect B6).
+        """
         return {
             "enabled": self._settings.daemon.cron_enabled,
             "running": self.running,
             "tick_count": self.tick_count,
             "skipped_circuit_open": self.skipped_circuit_open,
             "last_sweep_at": self.last_sweep_at,
+            "last_sweep_at_iso": self.last_sweep_at_iso,
             "last_sweep_stats": self.last_sweep_stats,
             "last_dream_at": self.last_dream_at,
+            "last_dream_at_iso": self.last_dream_at_iso,
             "last_dream_result": self.last_dream_result,
         }
 

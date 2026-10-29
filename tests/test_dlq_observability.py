@@ -157,7 +157,9 @@ async def test_unknown_class_returns_empty_not_everything(temp_queue):
 
 @pytest.mark.asyncio
 async def test_classes_match_is_case_insensitive(temp_queue):
-    await _seed(temp_queue, [("validationerror: lowercase here", "2026-10-01T00:00:00+00:00", OPEN)])
+    await _seed(
+        temp_queue, [("validationerror: lowercase here", "2026-10-01T00:00:00+00:00", OPEN)]
+    )
 
     rows = temp_queue.get_dlq_records(limit=10, classes=["ValidationError"], open_only=True)
 

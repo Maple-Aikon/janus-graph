@@ -60,6 +60,19 @@ pipeline:
   dream:
     enabled: true
     force_clustering: false
+  # Shared retry policy -- ONE policy for all three requeue paths (the
+  # nightly reaper, the DLQ batch replay, and the MANUAL single-episode
+  # replay). See pipeline.retry_policy in the live config for the full
+  # rationale. A DENYLIST on measured permanent upstream codes, not an
+  # allowlist of error classes: an allowlist silently starves every
+  # transient class it does not name.
+  retry_policy:
+    permanent_error_codes:
+      - "Error code: 404"
+      - "Error code: 402"
+    allowed_error_codes: []
+    reap_limit: 24
+    respect_attempt_ceiling: true
 
 # 4. Schema Repair & Heuristics Registry
 heuristics:

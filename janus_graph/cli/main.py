@@ -14,7 +14,7 @@ from ..engine.server import FalkorDBServerManager
 from ..migrate import detect_artifact, json_to_yaml, rollback_database, snapshot_database
 from ..pipeline.cron import run_cron_sweep
 from ..pipeline.dream import run_dream_consolidation
-from ..pipeline.queue import EpisodeQueue
+from ..pipeline.queue import EpisodeQueue, RetryPolicy
 from ..report.dispatcher import ReportDispatcher
 from ..report.models import ReportEvent, ReportSeverity
 
@@ -209,12 +209,24 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
                     )
             return 0
         elif action == "retry":
-            ok = asyncio.run(queue.replay_dlq_episode(args.episode_id))
+            # The shared retry policy applies here too: a manual retry must
+            # not be able to re-arm a permanent upstream fault that the
+            # automatic paths refuse (2026-10-23, round-2 blocker). The
+            # refusal is reported with the offending code named.
+            policy = RetryPolicy.from_settings(cfg)
+            ok = asyncio.run(queue.replay_dlq_episode(args.episode_id, policy=policy))
             if ok:
                 print(f"✅ Episode {args.episode_id} re-queued successfully.")
                 return 0
             else:
-                print(f"❌ Episode {args.episode_id} not found in DLQ.")
+                # ``dlq_refusal_reason`` is a SYNCHRONOUS reader (like
+                # ``get_stats``) — wrapping it in ``asyncio.run`` would raise
+                # "a coroutine was expected".
+                refused = queue.dlq_refusal_reason(args.episode_id, policy)
+                if refused:
+                    print(f"❌ Episode {args.episode_id} refused: {refused}")
+                else:
+                    print(f"❌ Episode {args.episode_id} not found in DLQ.")
                 return 1
         elif action == "reap":
             stuck = asyncio.run(
@@ -223,7 +235,12 @@ def run_cli(args: argparse.Namespace, cfg: JanusSettings) -> int:
                     max_attempts=cfg.pipeline.max_attempts,
                 )
             )
-            reaped = asyncio.run(queue.reap_failed_or_aborted())
+            # The CLI path used to call ``reap_failed_or_aborted()`` with NO
+            # arguments, so it took the hardcoded default limit and applied
+            # NONE of the policy. Now it passes the same policy and the same
+            # limit as the nightly path (2026-10-23, T2 item 8).
+            policy = RetryPolicy.from_settings(cfg)
+            reaped = asyncio.run(queue.reap_failed_or_aborted(policy=policy))
             print(
                 f"🧹 Queue reaped: {stuck} stuck records recovered, {reaped} failed/aborted records re-queued."
             )

@@ -16,7 +16,7 @@ from ..core.contracts import Settings
 from ..report.dispatcher import ReportDispatcher
 from ..report.models import ReportSeverity
 from .dream_phases import cluster_report
-from .queue import EpisodeQueue
+from .queue import EpisodeQueue, RetryPolicy
 
 logger = logging.getLogger("janus_graph.pipeline.dream")
 
@@ -100,6 +100,30 @@ def _phase1_result(phase1: Dict[str, Any]) -> Any:
     return ClusterResult(**{k: v for k, v in data.items() if k in fields})
 
 
+def _phase1_community_count(phase1: Dict[str, Any]) -> int:
+    """Read the community count from a phase-1 payload, wherever it lives.
+
+    ``run_phase1_cluster`` returns ``{"result": {...,"communities": N}}``.
+    The old read was ``phase1.get("communities", 0)`` — a key that does not
+    exist at the top level — so the reported count was structurally ALWAYS 0
+    (measured 2026-10-23: the 2026-10-22 run reported
+    ``phase_1_communities: 0`` next to its own "4650 communities over 6444
+    nodes").
+
+    Falls back to 0 when the key is absent or the value is not an int, so a
+    malformed payload reports 0 instead of raising inside the phase.
+    """
+    result = phase1.get("result")
+    if isinstance(result, dict):
+        count = result.get("communities")
+        if isinstance(count, int):
+            return count
+    count = phase1.get("communities")
+    if isinstance(count, int):
+        return count
+    return 0
+
+
 async def run_dream_consolidation(
     settings: Optional[Union[JanusSettings, Settings]] = None,
     force: bool = False,
@@ -128,6 +152,26 @@ async def run_dream_consolidation(
     run_id = str(uuid.uuid4())
     start_time = time.monotonic()
     now = datetime.now(timezone.utc).isoformat()
+
+    # ─── T3: the dream_runs audit trail ─────────────────────────────────
+    # The table has existed since the schema was written, with every column
+    # this needs — but NOTHING ever inserted into it, so after 49 successful
+    # dream runs it had 0 rows (defect B5, measured 2026-10-23). An empty
+    # table proves nothing unless a writer exists.
+    #
+    # The INSERT happens BEFORE any phase runs, so a run that CRASHES still
+    # leaves evidence that it started. The UPDATE happens at the end, with
+    # the four phase statuses and the error message.
+    try:
+        await queue.record_dream_run(
+            run_id=run_id,
+            started_at=now,
+            completed_at=None,
+            status="running",
+            episodes_evaluated=0,
+        )
+    except Exception as err:  # noqa: BLE001 - audit trail must not kill the run
+        logger.warning("dream: dream_runs INSERT failed: %s", err)
 
     results: Dict[str, Any] = {
         "run_id": run_id,
@@ -182,11 +226,16 @@ async def run_dream_consolidation(
         )
         results["phase_1_clustering"] = cluster_detail
         results["phase_1_detail"] = phase1
-        results["phase_1_communities"] = phase1.get("communities", 0)
+        # ``run_phase1_cluster`` nests the count under ``phase1["result"]``,
+        # so the old ``phase1.get("communities", 0)`` was structurally ALWAYS
+        # 0 — the field lied. Measured 2026-10-23: the 2026-10-22 run records
+        # ``phase_1_communities: 0`` while its own ``phase_1_clustering``
+        # string says "4650 communities over 6444 nodes".
+        results["phase_1_communities"] = _phase1_community_count(phase1)
         logger.info(
             "dream: phase_1_clustering %s communities=%s",
             phase1.get("status", "FAILED"),
-            phase1.get("communities", 0),
+            results["phase_1_communities"],
         )
     except Exception as err:  # noqa: BLE001 - clustering failure must not kill the run
         logger.warning("Clustering phase error: %s", err)
@@ -262,9 +311,24 @@ async def run_dream_consolidation(
 
     # Phase 4: DLQ Auto-repair — requeue failed/aborted (cheap, on episodes table)
     #         + DLQ batch replay (filter by class, on dead_letter table).
+    #
+    # The reaper used to be called with a hardcoded ``limit=100`` and NO
+    # policy, so it requeued the same 100 rows every night (measured
+    # 2026-10-23: 47 of 49 runs requeued exactly 100, and 5,228 of 5,328
+    # failed/aborted rows had NEVER been requeued). Now the SHARED policy
+    # applies to both write paths, and the limit comes from config.
     try:
-        repaired_count = await queue.reap_failed_or_aborted(limit=100)
+        retry_policy = RetryPolicy.from_settings(cfg)
+        repaired_count = await queue.reap_failed_or_aborted(policy=retry_policy)
         results["phase_4_dlq_repair"] = f"DONE ({repaired_count} requeued)"
+        # The FAIRNESS signal (T4). "How many distinct rows were offered a
+        # turn" vs "how many had already been offered one before". Under the
+        # old code the repeat rate was 100 % — that single number would have
+        # exposed the self-feeding loop on day one.
+        reap_stats = queue.reap_fairness_stats(
+            max_attempts=int(getattr(getattr(cfg, "pipeline", None), "max_attempts", 3) or 3)
+        )
+        results["phase_4_reap_fairness"] = reap_stats
 
         # DLQ batch replay — controlled by cfg.pipeline.dlq_replay
         dlq_cfg = getattr(cfg.pipeline, "dlq_replay", None)
@@ -273,6 +337,7 @@ async def run_dream_consolidation(
                 limit=getattr(dlq_cfg, "limit", 100),
                 classes=getattr(dlq_cfg, "classes", None),
                 min_age_sec=getattr(dlq_cfg, "min_age_sec", 60),
+                policy=retry_policy,
             )
             results["phase_4_replay_dlq_batch"] = (
                 f"DONE ({replayed} replayed, classes={getattr(dlq_cfg, 'classes', [])})"
@@ -281,6 +346,15 @@ async def run_dream_consolidation(
                 logger.info("dream: phase_4_replay_dlq_batch replayed=%d", replayed)
         else:
             results["phase_4_replay_dlq_batch"] = "SKIPPED (dlq_replay.enabled=false)"
+
+        # The DLQ HEALTH signal (T4). The old report showed the count of rows
+        # the reaper touched, which is not a health signal: what matters is
+        # whether the backlog is GROWING or DRAINING, i.e. the open-DLQ count
+        # (recovered_at IS NULL) plus the per-class breakdown.
+        results["phase_4_dlq_open"] = queue.get_stats().get("dlq", 0)
+        results["phase_4_dlq_by_class"] = queue.dlq_class_counts(
+            classes=getattr(dlq_cfg, "classes", None) if dlq_cfg is not None else None
+        )
     except Exception as err:
         results["phase_4_dlq_repair"] = f"FAILED: {err}"
 
@@ -297,6 +371,35 @@ async def run_dream_consolidation(
         results["status"] = "completed"
     results["duration_ms"] = round((time.monotonic() - start_time) * 1000, 2)
     results["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    # ─── T3: close the dream_runs row ───────────────────────────────────
+    # The phase columns store the SAME status strings the report carries, so
+    # the audit trail and the report can never disagree about what happened.
+    #
+    # ``episodes_evaluated`` counts EPISODES (queue rows), not graph nodes:
+    # ``nodes_before`` is the entity count from phase 2, which is a different
+    # unit entirely and would make the audit number meaningless.
+    try:
+        queue_stats = queue.get_stats()
+        episodes_evaluated = sum(
+            int(v) for k, v in queue_stats.items() if k != "dlq" and isinstance(v, int)
+        )
+    except Exception:  # noqa: BLE001 - a stats failure must not kill the run
+        episodes_evaluated = 0
+    try:
+        await queue.update_dream_run(
+            run_id=run_id,
+            completed_at=results["completed_at"],
+            status=results["status"],
+            episodes_evaluated=episodes_evaluated,
+            phase_1_status=str(results.get("phase_1_clustering", "SKIPPED")),
+            phase_2_status=str(results.get("phase_2_deduplication", "PENDING")),
+            phase_3_status=str(results.get("phase_3_orphan_pruning", "PENDING")),
+            phase_4_status=str(results.get("phase_4_dlq_repair", "PENDING")),
+            error_message="; ".join(failed_phases) if failed_phases else None,
+        )
+    except Exception as err:  # noqa: BLE001 - audit trail must not kill the run
+        logger.warning("dream: dream_runs UPDATE failed: %s", err)
 
     # Dispatch dream consolidation report
     try:
