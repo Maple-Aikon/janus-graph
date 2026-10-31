@@ -95,10 +95,21 @@ class SchemaRepairingLLMClient(LLMClient):
             attribute_extraction=attribute_extraction,
         )
 
-        if response_model is None or not isinstance(response, dict):
+        if response_model is None:
             return response
 
         # Try normal validation; on failure, run heuristic repair.
+        #
+        # NOTE: non-dict payloads (e.g. a bare list) must NOT return early here.
+        # The Graphiti call site does ``response_model(**response)``, which raises
+        # ``TypeError: argument after ** must be a mapping, not list`` for a list
+        # payload -- a TypeError, not a ValidationError, so the repair path was
+        # never entered and the quirk was logged nowhere. Every heuristic rule
+        # already knows how to wrap a bare list
+        # (``{"entity_resolutions": [...]}`` / ``{"extracted_entities": [...]}``),
+        # and ``response_model.model_validate(list)`` raises a ValidationError
+        # whose ``errors()[0]["input"]`` is the list itself, so letting the
+        # payload continue into the repair path is both safe and sufficient.
         try:
             response_model.model_validate(response)
             return response
