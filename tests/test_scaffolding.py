@@ -1,6 +1,7 @@
 """Baseline scaffolding and configuration tests."""
 
 import re
+import socket
 import tomllib
 from pathlib import Path
 
@@ -58,15 +59,73 @@ def test_config_env_override(monkeypatch):
     assert cfg.pipeline.worker_concurrency == 12
 
 
-def test_create_graphiti_instance_structure():
+def _isolate_falkordb_probe(monkeypatch):
+    """Neutralise the ONE network probe FalkorDB's constructor performs.
+
+    Why this exists
+    ---------------
+    ``create_graphiti_instance`` builds a ``FalkorDriver``, whose constructor
+    instantiates ``falkordb.asyncio.FalkorDB``. That constructor calls
+    ``Is_Cluster(conn)``, which opens a *synchronous* redis connection and
+    issues ``INFO server`` just to ask "is this a cluster?" (see
+    ``falkordb/asyncio/cluster.py``). So merely *constructing* the engine
+    performs real network I/O, and on a host with no FalkorDB it raises
+    ``redis.exceptions.ConnectionError``.
+
+    That made this test depend on the machine it ran on: green on Maple's box
+    (a live FalkorDB on :6379), red on a GitHub runner (nothing listening).
+    The pipeline had never been green -- 40/40 historical runs failed here.
+
+    The test asserts WIRING (which client classes are composed), not data,
+    so it does not need a database. ``Is_Cluster`` is patched to answer
+    "no" without a socket: the driver is then built exactly as production
+    builds it, minus the probe.
+
+    This is a test-side seam only. ``create_graphiti_instance`` itself is
+    unchanged, so the daemon/worker/MCP paths keep their real behaviour
+    (including the fail-soft handling of an unreachable engine).
+
+    Note the patch target is the symbol *as imported by* ``falkordb.asyncio.falkordb``
+    -- patching ``falkordb.asyncio.cluster.Is_Cluster`` would NOT work,
+    because the constructor already holds a direct reference to its own
+    module-level import.
+    """
+    from falkordb.asyncio import falkordb as falkordb_asyncio
+
+    monkeypatch.setattr(falkordb_asyncio, "Is_Cluster", lambda conn: False)
+
+
+def test_create_graphiti_instance_structure(monkeypatch):
+    """The composed engine must use the repair client and the embed cache.
+
+    Runs with NO FalkorDB reachable: the constructor's cluster probe is the
+    only network call, and it is stubbed (see ``_isolate_falkordb_probe``).
+    The port below is a closed one on purpose -- if the probe ever comes
+    back, this test fails loudly instead of quietly needing a live server.
+    """
     from graphiti_core import Graphiti
 
     from janus_graph.cache.embed_cache import EmbedCache
     from janus_graph.core.instance import create_graphiti_instance
     from janus_graph.heuristics.repairing_client import SchemaRepairingLLMClient
 
+    _isolate_falkordb_probe(monkeypatch)
+
+    # A port nothing is listening on. Bound and closed so the number is
+    # genuinely unused at the moment of the test.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+
     cfg = load_config()
+    cfg.engine.port = closed_port
     inst = create_graphiti_instance(cfg)
     assert isinstance(inst, Graphiti)
     assert isinstance(inst.llm_client, SchemaRepairingLLMClient)
     assert isinstance(inst.embedder, EmbedCache)
+
+    # The driver must be pointed at the configured endpoint -- proving the
+    # stub did not detach the engine from the settings.
+    kwargs = inst.driver.client.connection.connection_pool.connection_kwargs
+    assert kwargs["host"] == cfg.engine.host
+    assert kwargs["port"] == closed_port
