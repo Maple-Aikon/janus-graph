@@ -661,8 +661,7 @@ class EpisodeQueue:
             )
         except sqlite3.Error as err:  # pragma: no cover - defensive
             logger.warning(
-                "could not create %s: %s — the dedup gate falls back to "
-                "the Python-level check",
+                "could not create %s: %s — the dedup gate falls back to the Python-level check",
                 UNIQUE_INDEX_NAME,
                 err,
             )
@@ -755,9 +754,7 @@ class EpisodeQueue:
         # 'already queued'". So the pre-check answers the question and the
         # index guarantees the answer stays true.
         async with self._write_lock:
-            duplicate_of = await asyncio.to_thread(
-                self._find_active_duplicate_sync, payload_hash
-            )
+            duplicate_of = await asyncio.to_thread(self._find_active_duplicate_sync, payload_hash)
             if duplicate_of is not None and mode == "enforce":
                 # Rejected: do NOT insert. The caller gets the existing
                 # episode id so it can report "already queued".
@@ -1924,9 +1921,9 @@ class EpisodeQueue:
             # Durable counter. Read from the ledger, NOT from the RAM
             # attribute: the ledger survives the process that wrote it.
             try:
-                ledger_hits = conn.execute(
-                    "SELECT COUNT(*) as count FROM dedup_events"
-                ).fetchone()["count"]
+                ledger_hits = conn.execute("SELECT COUNT(*) as count FROM dedup_events").fetchone()[
+                    "count"
+                ]
             except sqlite3.Error:
                 # The ledger table is missing (a DB created before this
                 # migration and never re-opened). Fall back to the

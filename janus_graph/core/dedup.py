@@ -81,7 +81,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence
 
 from .payload_hash import canonical_payload_hash
 
@@ -214,9 +214,7 @@ def find_active_duplicate(
     if not payload_hash:
         return None
     row = conn.execute(
-        "SELECT id FROM episodes WHERE "
-        + _DUP_MATCH_SQL
-        + " ORDER BY created_at DESC LIMIT 1",
+        "SELECT id FROM episodes WHERE " + _DUP_MATCH_SQL + " ORDER BY created_at DESC LIMIT 1",
         (payload_hash, payload_hash),
     ).fetchone()
     if row is None:
@@ -385,9 +383,7 @@ def requeue_guarded(
         conn.execute("SAVEPOINT janus_dedup_requeue")
         try:
             params: List[Any] = [now]
-            sql = (
-                "UPDATE episodes SET status = 'queued', enqueued_at = ?, updated_at = ?"
-            )
+            sql = "UPDATE episodes SET status = 'queued', enqueued_at = ?, updated_at = ?"
             params.append(now)
             if extra_set:
                 sql += ", " + extra_set

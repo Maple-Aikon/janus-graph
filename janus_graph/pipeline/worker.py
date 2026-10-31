@@ -98,9 +98,7 @@ class EpisodeWorker:
                 # Cannot compute the hash — do not skip.
                 return False
 
-            payload_hash = canonical_payload_hash(
-                content, group_id, source_description
-            )
+            payload_hash = canonical_payload_hash(content, group_id, source_description)
             existing = await asyncio.to_thread(
                 self.queue.find_ingested_duplicate_sync, payload_hash
             )

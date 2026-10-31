@@ -149,8 +149,7 @@ class EpisodeQueueAdapter:
                 "CREATE INDEX IF NOT EXISTS idx_episodes_claimed_by ON episodes(claimed_by)"
             )
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_episodes_canonical_hash "
-                "ON episodes(canonical_hash)"
+                "CREATE INDEX IF NOT EXISTS idx_episodes_canonical_hash ON episodes(canonical_hash)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_episodes_status_claimed "

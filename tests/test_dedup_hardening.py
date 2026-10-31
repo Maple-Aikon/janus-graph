@@ -569,9 +569,7 @@ async def test_backstop_skips_an_already_ingested_payload():
     target = [r for r in records if r.id == pending_id]
     assert target, "the pending row must be claimed"
 
-    with patch(
-        "janus_graph.core.instance.create_graphiti_instance", return_value=mock_client
-    ):
+    with patch("janus_graph.core.instance.create_graphiti_instance", return_value=mock_client):
         ok = await worker.process_record(target[0])
 
     assert ok is True, "a skip is a success — the row was handled"
@@ -593,9 +591,7 @@ async def test_backstop_does_not_fire_when_disabled():
     pending_id = await q.enqueue("same content", group_id="g", source_description="s")
 
     worker = EpisodeWorker(q, _settings_with_backstop(False))
-    assert await worker._backstop_skip_if_ingested(
-        await _claim_one(q, pending_id)
-    ) is False
+    assert await worker._backstop_skip_if_ingested(await _claim_one(q, pending_id)) is False
 
 
 async def _claim_one(q: EpisodeQueue, episode_id: str):
@@ -700,7 +696,17 @@ async def test_requeue_guarded_skips_the_conflicting_row_only():
                 payload_hash, claimed_by, canonical_hash, dedup_gate
             ) VALUES (?, 'queued', ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)
             """,
-            ("holder", payload, now, now, now, payload_hash, "d:1", payload_hash, DEDUP_GATE_ENFORCE),
+            (
+                "holder",
+                payload,
+                now,
+                now,
+                now,
+                payload_hash,
+                "d:1",
+                payload_hash,
+                DEDUP_GATE_ENFORCE,
+            ),
         )
         # A failed row that would CONFLICT when requeued.
         conn.execute(
@@ -711,7 +717,17 @@ async def test_requeue_guarded_skips_the_conflicting_row_only():
                 payload_hash, claimed_by, canonical_hash, dedup_gate
             ) VALUES (?, 'failed', ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)
             """,
-            ("conflicting", payload, now, now, now, payload_hash, "d:1", payload_hash, DEDUP_GATE_ENFORCE),
+            (
+                "conflicting",
+                payload,
+                now,
+                now,
+                now,
+                payload_hash,
+                "d:1",
+                payload_hash,
+                DEDUP_GATE_ENFORCE,
+            ),
         )
         # A failed row with a DIFFERENT hash — must requeue fine.
         conn.execute(
@@ -732,10 +748,7 @@ async def test_requeue_guarded_skips_the_conflicting_row_only():
     assert "conflicting" not in requeued, "the conflicting row must be skipped"
     assert "fine" in requeued, "the other row must still be requeued"
 
-    statuses = {
-        r["id"]: r["status"]
-        for r in _rows(q, "SELECT id, status FROM episodes")
-    }
+    statuses = {r["id"]: r["status"] for r in _rows(q, "SELECT id, status FROM episodes")}
     assert statuses["conflicting"] == "failed", "the conflicting row must keep its old status"
     assert statuses["fine"] == "queued"
 
@@ -764,7 +777,17 @@ async def test_reap_failed_or_aborted_survives_a_conflict():
                 payload_hash, claimed_by, canonical_hash, dedup_gate
             ) VALUES (?, 'queued', ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)
             """,
-            ("holder", payload, now, now, now, payload_hash, "d:1", payload_hash, DEDUP_GATE_ENFORCE),
+            (
+                "holder",
+                payload,
+                now,
+                now,
+                now,
+                payload_hash,
+                "d:1",
+                payload_hash,
+                DEDUP_GATE_ENFORCE,
+            ),
         )
         conn.execute(
             """
@@ -774,7 +797,17 @@ async def test_reap_failed_or_aborted_survives_a_conflict():
                 payload_hash, claimed_by, canonical_hash, dedup_gate
             ) VALUES (?, 'failed', ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)
             """,
-            ("conflicting", payload, now, now, now, payload_hash, "d:1", payload_hash, DEDUP_GATE_ENFORCE),
+            (
+                "conflicting",
+                payload,
+                now,
+                now,
+                now,
+                payload_hash,
+                "d:1",
+                payload_hash,
+                DEDUP_GATE_ENFORCE,
+            ),
         )
         conn.execute(
             """
@@ -789,10 +822,7 @@ async def test_reap_failed_or_aborted_survives_a_conflict():
 
     reaped = await q.reap_failed_or_aborted(limit=100)
 
-    statuses = {
-        r["id"]: r["status"]
-        for r in _rows(q, "SELECT id, status FROM episodes")
-    }
+    statuses = {r["id"]: r["status"] for r in _rows(q, "SELECT id, status FROM episodes")}
     assert statuses["fine"] == "queued", "the non-conflicting row must be requeued"
     assert statuses["conflicting"] == "failed", "the conflicting row must keep its status"
     assert reaped == 1, "exactly one row was requeued"
