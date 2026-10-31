@@ -238,6 +238,78 @@ class RetryPolicyConfig(BaseModel):
     respect_attempt_ceiling: bool = True
 
 
+class DedupModeSettings(BaseModel):
+    """Enqueue-level dedup policy for the MCP writer (1b).
+
+    The daemon HTTP writer has always had a dedup gate (it stamps
+    ``payload_hash`` and answers 409 DUPLICATE_EPISODE). The MCP stdio
+    writer did NOT — it inserted straight into ``episodes`` with no hash,
+    so the daemon's gate could never see MCP rows and dedup was a
+    one-writer affair. This setting turns that gate on for the MCP writer.
+
+    Three modes, in increasing blast radius:
+
+      off      — no hash is computed, no hash is stored, nothing is
+                 rejected. The pre-1b behaviour, byte-for-byte. This is
+                 the DEFAULT: shipping a dedup gate that silently drops
+                 episodes is worse than shipping no gate.
+      observe  — the hash IS computed and stored, and a duplicate IS
+                 detected and counted/logged, but the episode is STILL
+                 enqueued. Nothing is ever rejected. This is the safe
+                 way to learn what the gate would have caught: run it for
+                 a few days and read the counter before trusting
+                 ``enforce``.
+      enforce  — a duplicate is rejected. The MCP tool returns a
+                 duplicate result instead of queueing the episode.
+
+    "Duplicate" means: same ``(content, group_id, source_description)``
+    triple as a row currently in status ``queued`` or ``processing``.
+    Rows already ``done`` / ``failed`` / ``aborted`` do NOT block a new
+    enqueue — re-queueing after a permanent failure is a legitimate
+    retry, and blocking it would strand the row.
+
+    Note this is NOT the same thing as ``pipeline.dream.dedup_apply``:
+    that one merges duplicate ENTITIES in the graph during nightly
+    consolidation; this one rejects duplicate EPISODES at enqueue time.
+
+    Why ``mode`` is a plain ``str`` and not a ``Literal``
+    ---------------------------------------------------
+    A ``Literal`` here would make pydantic RAISE on a typo'd value —
+    and because ``JanusSettings`` is built at MCP server startup, a
+    single typo in the operator's YAML would take the whole MCP server
+    down (no memory tools at all). A bad flag value must never be able
+    to brick the process that reads the config. So the field accepts any
+    string, and a ``field_validator`` folds an unrecognised value to
+    ``"off"`` (the safe mode) with a warning.
+
+    The runtime layer (``pipeline.queue._resolve_dedup_mode``) applies
+    the same rule independently, so a value that somehow bypasses this
+    validator still cannot cause a rejection.
+    """
+
+    mode: str = "off"
+
+    @field_validator("mode")
+    @classmethod
+    def _validate_mode(cls, v: str) -> str:
+        """Fold an unknown mode to ``off`` instead of raising.
+
+        ``off`` is the safe fallback: it means "the gate is not
+        applied". Falling back to ``enforce`` would turn a typo into
+        silent episode drops.
+        """
+        import logging
+
+        mode = str(v).strip().lower()
+        if mode in ("off", "observe", "enforce"):
+            return mode
+        logging.getLogger("janus_graph.config").warning(
+            "unknown pipeline.dedup.mode %r; falling back to 'off' (the gate will not be applied)",
+            v,
+        )
+        return "off"
+
+
 class PipelineConfig(BaseModel):
     """Pipeline and queue settings."""
 
@@ -247,6 +319,7 @@ class PipelineConfig(BaseModel):
     attempt_timeout_sec: int = 120
     cron_interval_min: int = 10
     drain_batch_size: int = 50
+    dedup: DedupModeSettings = Field(default_factory=DedupModeSettings)
     dream: DreamConfig = Field(default_factory=DreamConfig)
     dlq_replay: DlqReplayConfig = Field(default_factory=DlqReplayConfig)
     retry_policy: RetryPolicyConfig = Field(default_factory=RetryPolicyConfig)

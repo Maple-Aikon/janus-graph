@@ -11,9 +11,15 @@ Ingest a text episode or conversation turn into the knowledge graph.
 - **Parameters**:
   - `content` (`string`, required): Text content to ingest.
   - `name` (`string`, optional): Title or label for the episode.
-  - `source_description` (`string`, optional): Provenance metadata (e.g. `'user_conversation'`, `'agent_scratchpad'`).
-  - `group_id` (`string`, optional): Target partition/graph group (defaults to configured `database.graph_name`).
-- **Returns**: Dictionary with `status: "queued"` and `queue_id: "<uuid>"` in `<500ms`.
+  - `source_description` (`string`, optional): Provenance metadata (e.g. `'user_conversation'`, `'agent_scratchpad'`). Part of the dedup hash, so the same body under a different provenance is a DIFFERENT episode.
+- **Returns**: Dictionary with `success: true`, `queued: true` and `episode_id: "<uuid>"` in `<500ms`.
+
+  **Duplicate handling**: controlled by `pipeline.dedup.mode` (`off` | `observe` | `enforce`).
+  - `off` (default) — no dedup at all; every call queues a new episode.
+  - `observe` — the duplicate is detected and counted, but the episode is STILL queued.
+  - `enforce` — the duplicate is NOT queued. The call returns `success: true`, `queued: false`, `duplicate: true`, and `existing_episode_id` (the id of the row that already holds this payload). It is a structured result, not a raised error.
+
+  A "duplicate" means the same `(content, group_id, source_description)` triple as a row still in status `queued` or `processing`. Rows already `done`/`failed` do not block a new enqueue.
 
 ### 2. `search_memory`
 Search the knowledge graph using hybrid semantic vector and graph retrieval.

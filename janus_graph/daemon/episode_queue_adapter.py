@@ -24,13 +24,13 @@ Why not modify pipeline.queue.EpisodeQueue directly:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import sqlite3
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from ..core.payload_hash import canonical_payload_hash
 from ..pipeline.queue import EpisodeQueue
 from .phase3_settings import DaemonLockSettings
 
@@ -61,17 +61,18 @@ class EnqueueResult:
 def _payload_hash(content: str, group_id: str, source_description: str) -> str:
     """Stable sha256 of (content, group_id, source_description) triple.
 
+    Thin alias over the SHARED canonical implementation in
+    ``janus_graph.core.payload_hash``. The daemon writer and the MCP writer
+    must agree byte-for-byte, otherwise the daemon's dedup gate cannot see
+    the MCP writer's rows and dedup silently does nothing. The scheme
+    itself is documented (and frozen) in that module — this function only
+    keeps the old private name working for existing callers/tests.
+
     NOTE: source_description is part of the hash so two callers writing the
     same content from different sources do NOT collide (e.g. user_conversation
     vs agent_interaction could legitimately differ).
     """
-    h = hashlib.sha256()
-    h.update(content.encode("utf-8"))
-    h.update(b"|")
-    h.update(group_id.encode("utf-8"))
-    h.update(b"|")
-    h.update(source_description.encode("utf-8"))
-    return h.hexdigest()
+    return canonical_payload_hash(content, group_id, source_description)
 
 
 class EpisodeQueueAdapter:

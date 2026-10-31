@@ -88,6 +88,7 @@ All settings can be overridden using environment variables prefixed with `JANUS_
 | `server.falkordb_port` | `JANUS_FALKORDB_PORT` / `FALKORDB_PORT` | `6379` | TCP port for embedded FalkorDB |
 | `server.socket_path` | `JANUS_SOCKET_PATH` | `${DATA_DIR}/run/falkordb.sock` | Unix domain socket path for low-latency IPC |
 | `pipeline.async_mode` | `JANUS_ASYNC_MODE` / `ASYNC_MODE` | `true` | When true, `add_episode` queues asynchronously |
+| `pipeline.dedup.mode` | `JANUS_PIPELINE__DEDUP__MODE` | `off` | Enqueue dedup on the MCP writer: `off` (no dedup) / `observe` (detect + count, never reject) / `enforce` (reject duplicates). The daemon HTTP writer always dedups; this switch extends the same gate to MCP. |
 | `pipeline.concurrency_limit`| `JANUS_CONCURRENCY_LIMIT` | `4` | Worker parallel task semaphore bound |
 | `pipeline.batch_size` | `JANUS_BATCH_SIZE` | `10` | Max episodes processed per sweep cycle |
 | `llm.base_url` | `JANUS_LLM_BASE_URL` / `OPENAI_BASE_URL` | `http://127.0.0.1:4000/v1` | LLM Proxy or direct OpenAI API endpoint |

@@ -28,7 +28,7 @@ from .. import __version__
 from ..config import JanusSettings, load_config
 from ..engine.search_memory import search_memory as _engine_search_memory
 from ..pipeline.dream import run_dream_consolidation
-from ..pipeline.queue import EpisodeQueue, RetryPolicy
+from ..pipeline.queue import DuplicateEpisodeError, EpisodeQueue, RetryPolicy
 
 logger = logging.getLogger("janus_graph.mcp")
 
@@ -134,12 +134,36 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
         target_group = cfg.graphiti.group_id
         ep_name = name or f"Episode {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}"
 
-        ep_id = await queue.enqueue(
-            content=content,
-            name=ep_name,
-            source_description=source_description or "user_conversation",
-            group_id=target_group,
-        )
+        try:
+            ep_id = await queue.enqueue(
+                content=content,
+                name=ep_name,
+                source_description=source_description or "user_conversation",
+                group_id=target_group,
+                # Pass the mode explicitly from the server's own ``cfg``.
+                # The queue would otherwise resolve it from the config file
+                # on every call, and ``load_config()`` re-reads + re-parses
+                # the YAML each time (measured: 5.4 ms per call). This
+                # server already holds the authoritative settings.
+                dedup_mode=cfg.pipeline.dedup.mode,
+            )
+        except DuplicateEpisodeError as e:
+            # Only reachable in enforce mode. Reported as a structured
+            # result (not a raised error) so the caller can tell "already
+            # queued" apart from "the write failed" — the episode IS in the
+            # queue, under a different id.
+            return {
+                "success": True,
+                "queued": False,
+                "duplicate": True,
+                "episode_id": e.existing_episode_id,
+                "existing_episode_id": e.existing_episode_id,
+                "group_id": target_group,
+                "message": (
+                    f"Duplicate episode rejected: an identical payload is already "
+                    f"queued as {e.existing_episode_id}."
+                ),
+            }
         return {
             "success": True,
             "queued": True,

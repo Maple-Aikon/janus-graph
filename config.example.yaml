@@ -57,6 +57,28 @@ pipeline:
   attempt_timeout_sec: 900
   cron_interval_min: 10
   drain_batch_size: 20
+  # Enqueue-level dedup on the MCP writer.
+  #
+  # The daemon HTTP writer has always had a dedup gate (it stamps
+  # payload_hash and answers 409). This switch turns the SAME gate on for
+  # the MCP stdio writer, so both writers share one hash scheme
+  # (janus_graph.core.payload_hash).
+  #
+  #   off      — no hash, no rejection. The default, and byte-for-byte the
+  #              pre-1b behaviour.
+  #   observe  — hash IS computed and stored, duplicates ARE detected and
+  #              counted, but nothing is ever rejected. Run this first.
+  #   enforce  — duplicates are rejected.
+  #
+  # "Duplicate" = same (content, group_id, source_description) as a row
+  # still in status queued/processing. Rows already done/failed do NOT
+  # block a new enqueue.
+  #
+  # NOT the same as pipeline.dream.dedup_apply: that merges duplicate
+  # ENTITIES in the graph at night; this rejects duplicate EPISODES at
+  # enqueue time.
+  dedup:
+    mode: "off"
   dream:
     enabled: true
     force_clustering: false

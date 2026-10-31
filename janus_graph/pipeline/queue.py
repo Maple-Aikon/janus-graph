@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -13,8 +14,107 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import resolve_home_relative
+from ..core.payload_hash import canonical_payload_hash
 
 logger = logging.getLogger("janus_graph.pipeline.queue")
+
+#: The three dedup modes. ``off`` is the default and means "no behaviour
+#: change at all" — see ``DedupModeSettings`` in config.py for the full
+#: contract.
+DEDUP_MODES = ("off", "observe", "enforce")
+
+#: Fallback used when the config tree carries no usable value (e.g. a
+#: queue constructed directly in a test, with no settings object). Default
+#: is the SAFE mode: dedup off.
+_DEFAULT_DEDUP_MODE = "off"
+
+#: Cache for the config-resolved dedup mode. ``None`` = not resolved yet.
+#: See ``_resolve_dedup_mode`` for why this exists.
+_CONFIG_DEDUP_MODE: Optional[str] = None
+
+
+class DuplicateEpisodeError(Exception):
+    """Raised when enqueue rejects an episode as a duplicate.
+
+    Carries the id of the row that already holds this payload, so the
+    caller can report "already queued as <id>" instead of a bare failure.
+    """
+
+    def __init__(self, existing_episode_id: str, payload_hash: Optional[str] = None):
+        self.existing_episode_id = existing_episode_id
+        self.payload_hash = payload_hash
+        super().__init__(
+            f"duplicate episode; existing_id={existing_episode_id}"
+            + (f" hash={(payload_hash or '')[:12]}" if payload_hash else "")
+        )
+
+
+def _resolve_dedup_mode(dedup_mode: Optional[str] = None) -> str:
+    """Resolve the effective dedup mode.
+
+    Precedence:
+      1. explicit ``dedup_mode`` argument (per-call override);
+      2. ``cfg.pipeline.dedup.mode`` (YAML / env);
+      3. ``"off"`` (safe default).
+
+    An unrecognised value is NOT silently coerced to "off" — an unknown
+    mode means the operator typo'd a config value, and quietly falling
+    back would either disable a gate they enabled or enable one they
+    didn't. It is logged and treated as off (safe), never as enforce.
+
+    The config lookup is CACHED. ``load_config()`` re-reads and re-parses
+    the YAML file on every call (there is no cache inside it), so calling
+    it per-enqueue would add a file read + YAML parse to every MCP
+    ``add_episode`` call — a real hot-path regression for a gate whose
+    default is "off". The cache is process-local and invalidated by
+    ``reset_dedup_mode_cache()``, which the tests use; a config change
+    needs a process restart to take effect, which is the same contract
+    the rest of the daemon already has (MCP stdio servers are spawned
+    per parent process).
+    """
+    if dedup_mode is not None:
+        mode = str(dedup_mode).strip().lower()
+        if mode in DEDUP_MODES:
+            return mode
+        logger.warning(
+            "unknown dedup_mode %r passed to enqueue; falling back to %r",
+            dedup_mode,
+            _DEFAULT_DEDUP_MODE,
+        )
+        return _DEFAULT_DEDUP_MODE
+
+    global _CONFIG_DEDUP_MODE
+    if _CONFIG_DEDUP_MODE is None:
+        try:
+            from ..config import load_config
+
+            cfg = load_config()
+            mode = str(cfg.pipeline.dedup.mode).strip().lower()
+            if mode not in DEDUP_MODES:
+                logger.warning(
+                    "unknown cfg.pipeline.dedup.mode %r; falling back to %r",
+                    mode,
+                    _DEFAULT_DEDUP_MODE,
+                )
+                mode = _DEFAULT_DEDUP_MODE
+            _CONFIG_DEDUP_MODE = mode
+        except Exception:  # pragma: no cover - config load failure must not break enqueue
+            logger.debug("could not resolve dedup mode from config", exc_info=True)
+            _CONFIG_DEDUP_MODE = _DEFAULT_DEDUP_MODE
+    return _CONFIG_DEDUP_MODE
+
+
+def reset_dedup_mode_cache() -> None:
+    """Drop the cached config-resolved dedup mode.
+
+    Only useful for tests and for a process that re-reads its config
+    without restarting. In production the MCP stdio server is respawned
+    with its parent, so a restart is the normal way to pick up a config
+    change.
+    """
+    global _CONFIG_DEDUP_MODE
+    _CONFIG_DEDUP_MODE = None
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodes (
@@ -224,6 +324,11 @@ class EpisodeQueue:
         self._conn: Optional[sqlite3.Connection] = None
         self._init_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
+        # Observed duplicate count since process start. Incremented in both
+        # observe and enforce mode. Exposed via get_stats() so the
+        # observe-only rollout can be judged from a number instead of a
+        # feeling.
+        self._dedup_hits = 0
         self._init_db_sync()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -242,6 +347,11 @@ class EpisodeQueue:
             # error-message strings and so the migration is robust to silent
             # partial states (column present, index missing).
             self._ensure_column_sync(conn, "episodes", "last_replay_at", "TEXT")
+            # Dedup columns (1b). The daemon adapter migrates these too, but
+            # a queue can be created against a fresh DB the daemon never
+            # touched — and the MCP writer's INSERT references them.
+            self._ensure_column_sync(conn, "episodes", "payload_hash", "TEXT")
+            self._ensure_column_sync(conn, "episodes", "claimed_by", "TEXT")
             # Legacy indexes (pre-2026-09 schema) and new replay/recovery indexes.
             for name, ddl in (
                 ("idx_status", "CREATE INDEX idx_status ON episodes(status)"),
@@ -254,6 +364,14 @@ class EpisodeQueue:
                 (
                     "idx_dlq_recovered_at",
                     "CREATE INDEX idx_dlq_recovered_at ON dead_letter(recovered_at)",
+                ),
+                (
+                    "idx_episodes_payload_hash",
+                    "CREATE INDEX idx_episodes_payload_hash ON episodes(payload_hash)",
+                ),
+                (
+                    "idx_episodes_claimed_by",
+                    "CREATE INDEX idx_episodes_claimed_by ON episodes(claimed_by)",
                 ),
             ):
                 self._ensure_index_ddl_sync(conn, name, ddl)
@@ -293,8 +411,27 @@ class EpisodeQueue:
         name: Optional[str] = None,
         source_description: str = "agent_interaction",
         episode_id: Optional[str] = None,
+        dedup_mode: Optional[str] = None,
     ) -> str:
-        """Enqueue a new episode payload into SQLite."""
+        """Enqueue a new episode payload into SQLite.
+
+        ``dedup_mode`` overrides ``cfg.pipeline.dedup.mode`` for this call.
+        ``None`` means "use the configured mode". The three modes:
+
+          off      — no hash computed, no hash stored, nothing rejected.
+                     Byte-for-byte the pre-1b behaviour.
+          observe  — hash computed + stored, duplicates detected and
+                     counted, but the episode is STILL enqueued.
+          enforce  — duplicates are rejected (raises
+                     ``DuplicateEpisodeError``).
+
+        When a hash IS stored, ``claimed_by`` is stamped as
+        ``"mcp:<pid>"`` so the row's owner is visible in the same column the
+        daemon writer uses. This is bookkeeping only — nothing reads
+        ``claimed_by`` as a filter (see ``claim_next_batch``, which selects
+        purely on ``status='queued'``).
+        """
+        mode = _resolve_dedup_mode(dedup_mode)
         ep_id = episode_id or str(uuid.uuid4())
         payload = {
             "content": content,
@@ -305,8 +442,103 @@ class EpisodeQueue:
         payload_json = json.dumps(payload)
         now = _iso_now()
 
-        def _sync_insert():
-            with self._get_connection() as conn:
+        # Hashing is decided by MODE, independently of rejecting. An
+        # observe-mode run must store the hash (otherwise the next run
+        # cannot detect anything) while still enqueueing the row.
+        payload_hash: Optional[str] = None
+        if mode != "off":
+            payload_hash = canonical_payload_hash(content, group_id, source_description)
+
+        duplicate_of: Optional[str] = None
+        if payload_hash is not None:
+            async with self._write_lock:
+                duplicate_of = await asyncio.to_thread(
+                    self._find_active_duplicate_sync, payload_hash
+                )
+                if duplicate_of is not None and mode == "enforce":
+                    # Rejected: do NOT insert. The caller gets the existing
+                    # episode id so it can report "already queued".
+                    self._record_dedup_event(mode, duplicate_of, payload_hash)
+                    raise DuplicateEpisodeError(
+                        existing_episode_id=duplicate_of, payload_hash=payload_hash
+                    )
+
+                await asyncio.to_thread(
+                    self._insert_sync,
+                    ep_id=ep_id,
+                    payload_json=payload_json,
+                    now=now,
+                    payload_hash=payload_hash,
+                )
+
+            if duplicate_of is not None:
+                # observe mode: logged + counted, but the row IS enqueued.
+                self._record_dedup_event(mode, duplicate_of, payload_hash)
+            return ep_id
+
+        # off: unchanged path (no hash column written at all).
+        async with self._write_lock:
+            await asyncio.to_thread(
+                self._insert_sync,
+                ep_id=ep_id,
+                payload_json=payload_json,
+                now=now,
+                payload_hash=None,
+            )
+        return ep_id
+
+    def _record_dedup_event(
+        self, mode: str, duplicate_of: str, payload_hash: Optional[str]
+    ) -> None:
+        """Count + log a detected duplicate. Never raises, never blocks.
+
+        Kept separate from the insert path so a logging failure can never
+        take down an enqueue.
+        """
+        try:
+            self._dedup_hits += 1
+            logger.info(
+                "enqueue dedup %s: duplicate of episode %s (hash=%s) — %s",
+                mode,
+                duplicate_of,
+                (payload_hash or "")[:12],
+                "rejected" if mode == "enforce" else "enqueued anyway (observe)",
+            )
+        except Exception:  # pragma: no cover - defensive only
+            pass
+
+    def _find_active_duplicate_sync(self, payload_hash: str) -> Optional[str]:
+        """Return episode_id of a row with this hash in an ACTIVE status.
+
+        Active = ``queued`` or ``processing``. Rows in ``done`` / ``failed``
+        / ``aborted`` do NOT block: re-queueing after a permanent failure
+        is a legitimate retry, and blocking it would strand the row.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM episodes "
+                "WHERE payload_hash = ? AND status IN ('queued', 'processing') "
+                "ORDER BY created_at DESC LIMIT 1",
+                (payload_hash,),
+            ).fetchone()
+            return row[0] if row else None
+
+    def _insert_sync(
+        self,
+        ep_id: str,
+        payload_json: str,
+        now: str,
+        payload_hash: Optional[str],
+    ) -> None:
+        """INSERT one episode row, optionally stamping the payload hash.
+
+        ``payload_hash`` and ``claimed_by`` are written in the SAME
+        statement as the row itself. Splitting them would leave a window
+        where the row is visible to another writer WITHOUT its hash — and
+        that window is exactly what breaks dedup.
+        """
+        with self._get_connection() as conn:
+            if payload_hash is None:
                 conn.execute(
                     """
                     INSERT INTO episodes (
@@ -316,11 +548,26 @@ class EpisodeQueue:
                     """,
                     (ep_id, payload_json, now, now, now),
                 )
-                conn.commit()
-
-        async with self._write_lock:
-            await asyncio.to_thread(_sync_insert)
-        return ep_id
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO episodes (
+                        id, status, payload_json, enqueued_at, attempt_count,
+                        consecutive_failures, created_at, updated_at,
+                        payload_hash, claimed_by
+                    ) VALUES (?, 'queued', ?, ?, 0, 0, ?, ?, ?, ?)
+                    """,
+                    (
+                        ep_id,
+                        payload_json,
+                        now,
+                        now,
+                        now,
+                        payload_hash,
+                        f"mcp:{os.getpid()}",
+                    ),
+                )
+            conn.commit()
 
     async def claim_next_batch(self, limit: Optional[int] = 20) -> List[EpisodeRecord]:
         """Atomically claim next batch of queued episodes and set status to processing."""
@@ -1131,6 +1378,42 @@ class EpisodeQueue:
         with self._get_connection() as conn:
             cur = conn.execute("SELECT COUNT(*) as count FROM episodes")
             return int(cur.fetchone()["count"])
+
+    def get_dedup_stats(self) -> Dict[str, Any]:
+        """Return dedup counters for the observe-mode rollout.
+
+        Deliberately NOT merged into :meth:`get_stats` — that dict is summed
+        by callers (``dream.py`` computes ``done + queued``) and adding a
+        non-status key would corrupt those sums. The dedup numbers live in
+        their own accessor so nobody has to remember which dict is which.
+
+        Keys:
+          mode              — the effective mode for the NEXT enqueue.
+          observed_hits     — duplicates detected since process start.
+          hashed_rows       — rows in the DB carrying a payload_hash.
+          active_duplicates — rows sharing a payload_hash while still
+                              active (queued/processing). This is the number
+                              that says "the enforce gate would reject N
+                              rows right now".
+        """
+        with self._get_connection() as conn:
+            hashed = conn.execute(
+                "SELECT COUNT(*) as count FROM episodes WHERE payload_hash IS NOT NULL"
+            ).fetchone()["count"]
+            active_dupes = conn.execute(
+                "SELECT COUNT(*) as count FROM ("
+                "  SELECT payload_hash FROM episodes"
+                "  WHERE payload_hash IS NOT NULL"
+                "    AND status IN ('queued', 'processing')"
+                "  GROUP BY payload_hash HAVING COUNT(*) > 1"
+                ")"
+            ).fetchone()["count"]
+        return {
+            "mode": _resolve_dedup_mode(),
+            "observed_hits": self._dedup_hits,
+            "hashed_rows": int(hashed),
+            "active_duplicates": int(active_dupes),
+        }
 
     @staticmethod
     def _dlq_class_predicate(n: int) -> str:
