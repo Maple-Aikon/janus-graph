@@ -238,6 +238,54 @@ class RetryPolicyConfig(BaseModel):
     respect_attempt_ceiling: bool = True
 
 
+class DedupBackstopSettings(BaseModel):
+    """Processing-layer backstop — a SECOND line of defence, opt-in.
+
+    The enqueue gate (``DedupModeSettings.mode``) is the PRIMARY dedup
+    mechanism: it is the only place where the writer can still tell the
+    caller "this is a duplicate, and here is the id of the row that holds
+    it". That contract is not expressible at the processing layer, so the
+    gate stays where it is.
+
+    The backstop is the safety net UNDER the gate. It catches what the
+    gate structurally cannot:
+
+      * the CROSS-PROCESS race — three writer processes (MCP stdio, the
+        hook-spawned python, the daemon) mean the gate's
+        check-then-insert is a TOCTOU window; two writers can both pass
+        the check and both insert;
+      * the "same content sent again hours later" case — by then the
+        first row has LEFT the active set, so the gate's active-only
+        lookup finds nothing.
+
+    WHY IT IS DEFAULT-OFF
+    ---------------------
+    A done-aware backstop can suppress a LEGITIMATE re-ingestion: the
+    same text sent twice because the user genuinely wants it in the
+    graph twice. That is a DATA-LOSS failure, and it is invisible — the
+    episode looks processed. So this must be a deliberate choice made
+    with the ledger open, not a default.
+
+    Measured on the live traffic (2026-10-31): the gate finds 0
+    duplicates in every window (30d / 14d / 7d / 2d / 1d), and the
+    done-aware population is 850 historical groups of which 845 are a
+    one-off 2026-09-08 backfill. So the backstop is a guard against a
+    FUTURE race, not a fix for a present one.
+
+    ``enabled: False`` is the default, so shipping this changes nothing
+    until somebody turns it on.
+    """
+
+    enabled: bool = False
+
+    #: How far back the backstop looks for an already-ingested copy.
+    #: ``0`` means "any time" (no bound). A positive value limits the
+    #: lookback to rows whose ``created_at`` is newer than N seconds,
+    #: which keeps a long-lived project from being blocked by a
+    #: coincidental match from months ago.
+    lookback_sec: int = 0
+
+
 class DedupModeSettings(BaseModel):
     """Enqueue-level dedup policy for the MCP writer (1b).
 
@@ -288,6 +336,11 @@ class DedupModeSettings(BaseModel):
     """
 
     mode: str = "off"
+
+    #: The processing-layer backstop. Opt-in, default-off. See
+    #: ``DedupBackstopSettings`` for why it exists and why it must not
+    #: be on by default.
+    backstop: DedupBackstopSettings = Field(default_factory=DedupBackstopSettings)
 
     @field_validator("mode")
     @classmethod

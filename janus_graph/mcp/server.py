@@ -152,6 +152,20 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
             # result (not a raised error) so the caller can tell "already
             # queued" apart from "the write failed" — the episode IS in the
             # queue, under a different id.
+            #
+            # ``existing_episode_id`` is None only in the pathological
+            # case where the UNIQUE index fired and no holder could be
+            # found. The message then says so instead of inventing an id.
+            if e.existing_episode_id:
+                message = (
+                    f"Duplicate episode rejected: an identical payload is already "
+                    f"queued as {e.existing_episode_id}."
+                )
+            else:
+                message = (
+                    "Duplicate episode rejected: an identical payload was already "
+                    "in flight, but the holding episode could not be identified."
+                )
             return {
                 "success": True,
                 "queued": False,
@@ -159,10 +173,7 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
                 "episode_id": e.existing_episode_id,
                 "existing_episode_id": e.existing_episode_id,
                 "group_id": target_group,
-                "message": (
-                    f"Duplicate episode rejected: an identical payload is already "
-                    f"queued as {e.existing_episode_id}."
-                ),
+                "message": message,
             }
         return {
             "success": True,
@@ -462,6 +473,37 @@ def create_mcp_server(settings: Optional[JanusSettings] = None) -> MCPServer:
             "enabled": cfg.cache.embed.enabled,
             "max_size": cfg.cache.embed.max_size,
             "eviction": cfg.cache.embed.eviction,
+        }
+
+    @mcp.tool()
+    async def dedup_stats(limit: int = 20) -> Dict[str, Any]:
+        """Return the dedup gate's counters and the most recent dedup events.
+
+        ``observed_hits`` is read from the DURABLE ``dedup_events``
+        ledger, not from a process-local counter. That matters because
+        there are three writer processes (the MCP stdio server, the
+        PicoClaw hook's freshly-spawned python, and the daemon): a RAM
+        counter was always 0 when read from anywhere else, so it could
+        not answer the question the observe rollout actually asks.
+
+        The ledger is also the audit trail: ``recent_events`` shows WHAT
+        was detected — the payload hash, which episode already holds it,
+        and which writer saw it.
+
+        Args:
+            limit: How many recent events to return (newest first).
+        """
+        stats = queue.get_dedup_stats()
+        backstop_cfg = getattr(cfg.pipeline.dedup, "backstop", None)
+        return {
+            "mode": stats.get("mode"),
+            "observed_hits": stats.get("observed_hits"),
+            "hashed_rows": stats.get("hashed_rows"),
+            "canonical_rows": stats.get("canonical_rows"),
+            "active_duplicates": stats.get("active_duplicates"),
+            "backstop_skips": stats.get("backstop_skips"),
+            "backstop_enabled": bool(getattr(backstop_cfg, "enabled", False)),
+            "recent_events": queue.get_recent_dedup_events(limit=limit),
         }
 
     @mcp.tool()

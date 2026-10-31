@@ -14,7 +14,29 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import resolve_home_relative
-from ..core.payload_hash import canonical_payload_hash
+from ..core.dedup import (
+    ACTIVE_STATUSES as _SHARED_ACTIVE_STATUSES,
+)
+from ..core.dedup import (
+    BACKSTOP_SKIPPED_STATUS as _SHARED_BACKSTOP_SKIPPED_STATUS,
+)
+from ..core.dedup import (
+    NON_BLOCKING_STATUSES as _SHARED_NON_BLOCKING_STATUSES,
+)
+from ..core.dedup import (
+    UNIQUE_INDEX_DDL as _SHARED_UNIQUE_INDEX_DDL,
+)
+from ..core.dedup import (
+    UNIQUE_INDEX_NAME as _SHARED_UNIQUE_INDEX_NAME,
+)
+from ..core.dedup import (
+    canonical_payload_hash,
+    find_active_duplicate,
+    find_any_duplicate,
+    recent_dedup_events,
+    record_dedup_event,
+    requeue_guarded,
+)
 
 logger = logging.getLogger("janus_graph.pipeline.queue")
 
@@ -38,14 +60,49 @@ class DuplicateEpisodeError(Exception):
 
     Carries the id of the row that already holds this payload, so the
     caller can report "already queued as <id>" instead of a bare failure.
+
+    ``existing_episode_id`` is ``None`` only in the pathological case
+    where the UNIQUE index rejected the INSERT and no holder could be
+    found at all (the holder left the active set between the rejected
+    INSERT and the lookup, AND no other row carries the hash). The
+    message says so explicitly rather than pretending to know an id.
     """
 
-    def __init__(self, existing_episode_id: str, payload_hash: Optional[str] = None):
+    def __init__(self, existing_episode_id: Optional[str], payload_hash: Optional[str] = None):
         self.existing_episode_id = existing_episode_id
         self.payload_hash = payload_hash
         super().__init__(
-            f"duplicate episode; existing_id={existing_episode_id}"
+            (
+                f"duplicate episode; existing_id={existing_episode_id}"
+                if existing_episode_id
+                else "duplicate episode; existing id unknown"
+            )
             + (f" hash={(payload_hash or '')[:12]}" if payload_hash else "")
+        )
+
+
+class DuplicateRaceError(Exception):
+    """Raised internally when the UNIQUE index rejects an INSERT.
+
+    This is the CROSS-PROCESS race the partial UNIQUE index exists to
+    close: another writer inserted the same active payload between our
+    pre-check SELECT and our INSERT.
+
+    It is a distinct type from ``DuplicateEpisodeError`` because it is
+    NOT a policy decision — the writer did not choose to reject, the
+    database did. The enqueue path translates it into the policy
+    decision (reject in ``enforce``, enqueue-and-record in ``observe``)
+    so callers only ever see ``DuplicateEpisodeError``.
+
+    It never escapes the queue: ``enqueue`` catches it and converts it.
+    """
+
+    def __init__(self, existing_episode_id: Optional[str], payload_hash: Optional[str] = None):
+        self.existing_episode_id = existing_episode_id
+        self.payload_hash = payload_hash
+        super().__init__(
+            "duplicate detected by the unique index"
+            + (f"; existing_id={existing_episode_id}" if existing_episode_id else "")
         )
 
 
@@ -169,7 +226,75 @@ CREATE TABLE IF NOT EXISTS dream_entity_undo_log (
     created_at TEXT NOT NULL,
     FOREIGN KEY(run_id) REFERENCES dream_runs(run_id)
 );
+
+-- ─── dedup ledger (2026-10-31) ────────────────────────────────────────
+-- Durable record of every duplicate DETECTED by the enqueue gate.
+--
+-- WHY THIS TABLE EXISTS: before it, the dedup hit counter was a plain
+-- Python attribute (``EpisodeQueue._dedup_hits``) living in the process
+-- that happened to detect the duplicate. The PicoClaw hook spawns a FRESH
+-- python process for every write, so the counter was always 0 when anybody
+-- read it -- ``observed_hits`` was a number that LIES. The log line was
+-- discarded for the same reason (the spawned process never called
+-- ``logging.basicConfig``).
+--
+-- Writing the event to the DB makes the counter survive the process that
+-- produced it, so the observe rollout can be judged from a real number.
+--
+-- ``detected_at`` is the ONLY timestamp: an event row is a point-in-time
+-- observation, not a lifecycle. There is no "resolved" column because a
+-- detected duplicate needs no resolution -- the row that caused it is
+-- either still active or already terminal.
+CREATE TABLE IF NOT EXISTS dedup_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    detected_at TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    action TEXT NOT NULL,
+    payload_hash TEXT,
+    existing_episode_id TEXT,
+    duplicate_episode_id TEXT,
+    writer TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_dedup_events_detected_at
+    ON dedup_events(detected_at);
+CREATE INDEX IF NOT EXISTS idx_dedup_events_mode
+    ON dedup_events(mode);
 """
+
+#: The status values the enqueue gate treats as "this payload is already in
+#: flight" — a duplicate of one of these is rejected in ``enforce`` mode.
+#:
+#: Re-exported from ``core.dedup`` so there is ONE definition shared by
+#: the Python-level check, the DB index predicate and the daemon writer.
+#: The UNIQUE partial index below is scoped to exactly this set, so the DB
+#: invariant and the Python check can never disagree about what "active"
+#: means. If this tuple changes, the index predicate must change with it.
+ACTIVE_STATUSES = _SHARED_ACTIVE_STATUSES
+
+#: Terminal-ish statuses that do NOT block a new enqueue: re-queueing after
+#: a permanent failure is a legitimate retry, and blocking it would strand
+#: the row forever.
+NON_BLOCKING_STATUSES = _SHARED_NON_BLOCKING_STATUSES
+
+#: Name of the UNIQUE partial index that makes the dedup gate atomic.
+#: Scoped to the ACTIVE statuses, so a row that has already been ingested
+#: (status='done') does not block a later write of the same content — that
+#: is exactly the "done-aware" freedom the enqueue gate has always had.
+UNIQUE_INDEX_NAME = _SHARED_UNIQUE_INDEX_NAME
+
+#: DDL for that index. The predicate must list ACTIVE_STATUSES literally —
+#: SQLite does not accept a bind parameter in a partial index predicate.
+UNIQUE_INDEX_DDL = _SHARED_UNIQUE_INDEX_DDL
+
+#: The status a row is given when the processing-layer backstop decides the
+#: payload was already ingested. It is deliberately NOT one of the failure
+#: statuses: the row was not a failure, so it must not be reaped, retried or
+#: dead-lettered. It is also NOT 'done' — that status means "this content
+#: WAS ingested", and claiming it for a row that never was would inflate
+#: ``dream.py``'s ``done + queued`` episode count with content the graph
+#: never saw.
+BACKSTOP_SKIPPED_STATUS = _SHARED_BACKSTOP_SKIPPED_STATUS
 
 
 def _iso_now() -> str:
@@ -352,6 +477,26 @@ class EpisodeQueue:
             # touched — and the MCP writer's INSERT references them.
             self._ensure_column_sync(conn, "episodes", "payload_hash", "TEXT")
             self._ensure_column_sync(conn, "episodes", "claimed_by", "TEXT")
+            # Canonical hash (2026-10-31). ``payload_hash`` is the LEGACY
+            # column: it was written by the daemon adapter and by the 1b
+            # MCP path, but the 11 482 ``signet_*_reimport`` backfill rows
+            # carry a hash from an UNKNOWN scheme (measured 2026-10-31: 367
+            # rows match the canonical scheme, 11 482 do not, and none of
+            # 6 plausible sha256 orderings reproduces them).
+            #
+            # So the legacy column is PRESERVED verbatim and a NEW column
+            # carries the canonical hash. The backfill below only fills
+            # ``canonical_hash`` for rows whose stored ``payload_hash``
+            # EQUALS the recomputed canonical hash — i.e. rows we can PROVE
+            # are canonical. Everything else keeps ``canonical_hash IS
+            # NULL``, which the unique index treats as "unknown => never a
+            # duplicate". Nothing is deleted or rewritten.
+            self._ensure_column_sync(conn, "episodes", "canonical_hash", "TEXT")
+            # Which gate wrote this row: off / observe / enforce. It is
+            # bookkeeping AND it decides whether the UNIQUE partial index
+            # covers the row — observe-mode rows must stay duplicate-able
+            # (observe never rejects), enforce-mode rows must not.
+            self._ensure_column_sync(conn, "episodes", "dedup_gate", "TEXT")
             # Legacy indexes (pre-2026-09 schema) and new replay/recovery indexes.
             for name, ddl in (
                 ("idx_status", "CREATE INDEX idx_status ON episodes(status)"),
@@ -373,8 +518,14 @@ class EpisodeQueue:
                     "idx_episodes_claimed_by",
                     "CREATE INDEX idx_episodes_claimed_by ON episodes(claimed_by)",
                 ),
+                (
+                    "idx_episodes_canonical_hash",
+                    "CREATE INDEX idx_episodes_canonical_hash ON episodes(canonical_hash)",
+                ),
             ):
                 self._ensure_index_ddl_sync(conn, name, ddl)
+            self._backfill_canonical_hash_sync(conn)
+            self._ensure_unique_active_hash_index_sync(conn)
             conn.commit()
 
     @staticmethod
@@ -403,6 +554,118 @@ class EpisodeQueue:
         ).fetchone()
         if row is None:
             conn.execute(ddl)
+
+    @staticmethod
+    def _backfill_canonical_hash_sync(conn: sqlite3.Connection) -> None:
+        """Fill ``canonical_hash`` for every row whose payload triple is complete.
+
+        WHY ALL RECOMPUTABLE ROWS, NOT ONLY "PROVABLE" ONES
+        -----------------------------------------------------
+        The first cut of this backfill only filled rows whose stored
+        ``payload_hash`` EQUALS the canonical hash recomputed from their
+        own payload triple. The reasoning was that the 11 482
+        ``signet_*_reimport`` rows carry a hash from an UNKNOWN scheme,
+        so their canonical hash could not be trusted.
+
+        That reasoning was too narrow, and being too narrow has a real
+        cost: it left 12 345 of 12 712 rows with ``canonical_hash IS
+        NULL``, which makes them INVISIBLE to the processing-layer
+        backstop. The backstop exists to answer "was this exact content
+        already ingested?" — and for the entire pre-migration
+        population the answer would have been "no", which is wrong.
+
+        The original concern does not survive contact with the index:
+
+          * the UNIQUE index is scoped to ``dedup_gate='enforce'``;
+          * legacy rows have ``dedup_gate IS NULL``, so they are OUTSIDE
+            the index's scope entirely;
+          * therefore two legacy rows sharing a canonical hash CANNOT
+            violate the index.
+
+        Verified on a copy of the live DB (2026-10-31): backfilling all
+        12 345 recomputable rows took 1.5 s, changed ZERO original
+        columns of ZERO existing rows, and the UNIQUE index still
+        created successfully.
+
+        WHAT "RECOMPUTABLE" MEANS
+        -------------------------
+        The row's ``payload_json`` must carry all three of ``content``,
+        ``group_id`` and ``source_description``. The canonical hash is
+        computed FROM those three, so a row missing one of them cannot
+        be hashed and is left alone. Measured on the live DB: all 12 713
+        rows have a complete triple, so nothing is skipped in practice.
+
+        The legacy ``payload_hash`` column is PRESERVED verbatim — it is
+        never overwritten. ``canonical_hash`` is a separate column
+        precisely so the unknown-scheme digests stay visible and
+        untouched.
+        """
+        rows = conn.execute(
+            "SELECT id, payload_json FROM episodes WHERE canonical_hash IS NULL"
+        ).fetchall()
+        if not rows:
+            return
+        updates = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            content = payload.get("content")
+            group_id = payload.get("group_id")
+            source_description = payload.get("source_description")
+            if content is None or group_id is None or source_description is None:
+                continue
+            updates.append(
+                (canonical_payload_hash(content, group_id, source_description), row["id"])
+            )
+        if not updates:
+            return
+        conn.executemany(
+            "UPDATE episodes SET canonical_hash = ? WHERE id = ?",
+            updates,
+        )
+        logger.info(
+            "canonical_hash backfill: filled %d row(s) from their own payload "
+            "triple (the legacy payload_hash column is left untouched)",
+            len(updates),
+        )
+
+    @staticmethod
+    def _ensure_unique_active_hash_index_sync(conn: sqlite3.Connection) -> None:
+        """Create the UNIQUE partial index that makes the dedup gate atomic.
+
+        The index is scoped to the ACTIVE statuses, so a row that has
+        already been ingested never blocks a later write of the same
+        content. Two writers in two processes can no longer both insert
+        the same active payload: the second INSERT fails with
+        ``sqlite3.IntegrityError`` instead of winning a race.
+
+        If the index cannot be created (a pre-existing duplicate pair in
+        the ACTIVE statuses — measured 0 on the live DB as of 2026-10-31),
+        the failure is LOGGED, not raised. A queue that cannot open its
+        database is worse than a queue without the extra guarantee: the
+        Python-level check still runs, so the gate degrades to
+        best-effort rather than breaking every write.
+        """
+        try:
+            conn.execute(UNIQUE_INDEX_DDL)
+        except sqlite3.IntegrityError as err:
+            logger.warning(
+                "could not create %s (pre-existing active duplicates?): %s — "
+                "the dedup gate falls back to the Python-level check",
+                UNIQUE_INDEX_NAME,
+                err,
+            )
+        except sqlite3.Error as err:  # pragma: no cover - defensive
+            logger.warning(
+                "could not create %s: %s — the dedup gate falls back to "
+                "the Python-level check",
+                UNIQUE_INDEX_NAME,
+                err,
+            )
 
     async def enqueue(
         self,
@@ -442,70 +705,173 @@ class EpisodeQueue:
         payload_json = json.dumps(payload)
         now = _iso_now()
 
-        # Hashing is decided by MODE, independently of rejecting. An
-        # observe-mode run must store the hash (otherwise the next run
-        # cannot detect anything) while still enqueueing the row.
+        # The CANONICAL hash is always computed: it is a content
+        # address, not a gate. The mode decides whether a duplicate is
+        # REJECTED, not whether the content can be addressed. Rows
+        # written in ``off`` mode still carry a canonical hash so the
+        # processing-layer backstop can see them — otherwise the whole
+        # pre-migration population would be invisible to it.
+        canonical_hash = canonical_payload_hash(content, group_id, source_description)
+
+        # Hashing the LEGACY column is decided by MODE, independently of
+        # rejecting. An observe-mode run must store it (otherwise the
+        # next run cannot detect anything) while still enqueueing the
+        # row. ``off`` keeps the pre-1b contract: no legacy hash.
         payload_hash: Optional[str] = None
         if mode != "off":
-            payload_hash = canonical_payload_hash(content, group_id, source_description)
+            payload_hash = canonical_hash
 
-        duplicate_of: Optional[str] = None
-        if payload_hash is not None:
+        if payload_hash is None:
+            # off: no legacy hash column written, but canonical_hash is.
             async with self._write_lock:
-                duplicate_of = await asyncio.to_thread(
-                    self._find_active_duplicate_sync, payload_hash
+                await asyncio.to_thread(
+                    self._insert_sync,
+                    ep_id=ep_id,
+                    payload_json=payload_json,
+                    now=now,
+                    payload_hash=None,
+                    dedup_gate="off",
+                    canonical_hash=canonical_hash,
                 )
-                if duplicate_of is not None and mode == "enforce":
-                    # Rejected: do NOT insert. The caller gets the existing
-                    # episode id so it can report "already queued".
-                    self._record_dedup_event(mode, duplicate_of, payload_hash)
-                    raise DuplicateEpisodeError(
-                        existing_episode_id=duplicate_of, payload_hash=payload_hash
-                    )
+            return ep_id
 
+        # ── hashed path (observe / enforce) ───────────────────────────
+        #
+        # TWO layers now, because one layer cannot cover both writers:
+        #
+        #   1. the Python pre-check (fast, gives a clean "existing id"),
+        #   2. the UNIQUE partial index (authoritative, race-proof).
+        #
+        # The pre-check alone was NOT enough: it is a SELECT followed by an
+        # INSERT, and there are THREE writer processes (MCP stdio server,
+        # the hook-spawned python, the daemon). The in-process asyncio lock
+        # protects nothing across processes, so two writers could both pass
+        # the check and both insert. Measured 2026-10-31: 5 such
+        # cross-writer duplicate groups exist in the live history.
+        #
+        # The index alone was not enough either: it cannot tell the caller
+        # WHICH row already holds the payload, and the enqueue-layer
+        # contract is "return the existing id so the writer can say
+        # 'already queued'". So the pre-check answers the question and the
+        # index guarantees the answer stays true.
+        async with self._write_lock:
+            duplicate_of = await asyncio.to_thread(
+                self._find_active_duplicate_sync, payload_hash
+            )
+            if duplicate_of is not None and mode == "enforce":
+                # Rejected: do NOT insert. The caller gets the existing
+                # episode id so it can report "already queued".
+                await asyncio.to_thread(
+                    self._record_dedup_event_sync,
+                    mode,
+                    "rejected",
+                    payload_hash,
+                    duplicate_of,
+                    ep_id,
+                )
+                raise DuplicateEpisodeError(
+                    existing_episode_id=duplicate_of, payload_hash=payload_hash
+                )
+
+            try:
                 await asyncio.to_thread(
                     self._insert_sync,
                     ep_id=ep_id,
                     payload_json=payload_json,
                     now=now,
                     payload_hash=payload_hash,
+                    dedup_gate=mode,
+                    canonical_hash=canonical_hash,
                 )
+            except DuplicateRaceError as err:
+                # The UNIQUE index rejected the INSERT: another writer
+                # inserted the same active payload between our pre-check
+                # and our INSERT. This is the race the index exists to
+                # close. The row we wanted is NOT in the table.
+                if mode == "enforce":
+                    await asyncio.to_thread(
+                        self._record_dedup_event_sync,
+                        mode,
+                        "rejected",
+                        payload_hash,
+                        err.existing_episode_id,
+                        ep_id,
+                    )
+                    raise DuplicateEpisodeError(
+                        existing_episode_id=err.existing_episode_id,
+                        payload_hash=payload_hash,
+                    ) from err
+                # observe mode: the duplicate IS enqueued (that is the
+                # whole point of observe), and the event is recorded.
+                await asyncio.to_thread(
+                    self._record_dedup_event_sync,
+                    mode,
+                    "detected",
+                    payload_hash,
+                    err.existing_episode_id,
+                    ep_id,
+                )
+                return ep_id
 
-            if duplicate_of is not None:
-                # observe mode: logged + counted, but the row IS enqueued.
-                self._record_dedup_event(mode, duplicate_of, payload_hash)
-            return ep_id
-
-        # off: unchanged path (no hash column written at all).
-        async with self._write_lock:
+        if duplicate_of is not None:
+            # observe mode: logged + counted, but the row IS enqueued.
             await asyncio.to_thread(
-                self._insert_sync,
-                ep_id=ep_id,
-                payload_json=payload_json,
-                now=now,
-                payload_hash=None,
+                self._record_dedup_event_sync,
+                mode,
+                "detected",
+                payload_hash,
+                duplicate_of,
+                ep_id,
             )
         return ep_id
 
-    def _record_dedup_event(
-        self, mode: str, duplicate_of: str, payload_hash: Optional[str]
+    def _record_dedup_event_sync(
+        self,
+        mode: str,
+        action: str,
+        payload_hash: Optional[str],
+        existing_episode_id: Optional[str],
+        duplicate_episode_id: Optional[str],
     ) -> None:
-        """Count + log a detected duplicate. Never raises, never blocks.
+        """Append one row to the durable ``dedup_events`` ledger.
 
-        Kept separate from the insert path so a logging failure can never
-        take down an enqueue.
+        The counter used to be a plain Python attribute on the queue
+        object (``self._dedup_hits``). The PicoClaw hook spawns a FRESH
+        python process for every write, so the counter was always 0 when
+        anybody read it — ``observed_hits`` was a number that LIES. The
+        ledger row survives the process that produced it, so the observe
+        rollout can finally be judged from a real number.
+
+        ``self._dedup_hits`` is still incremented, but only as a
+        process-local FALLBACK for the case where the ledger table is
+        unavailable (a read-only DB, a migration that failed). The DB is
+        the source of truth whenever it can be read.
+
+        Never raises: a ledger write must not be able to fail an
+        enqueue.
         """
         try:
             self._dedup_hits += 1
+            with self._get_connection() as conn:
+                record_dedup_event(
+                    conn,
+                    mode=mode,
+                    action=action,
+                    payload_hash=payload_hash,
+                    existing_episode_id=existing_episode_id,
+                    duplicate_episode_id=duplicate_episode_id,
+                    writer=f"mcp:{os.getpid()}",
+                )
             logger.info(
-                "enqueue dedup %s: duplicate of episode %s (hash=%s) — %s",
+                "enqueue dedup %s/%s: duplicate of episode %s (hash=%s) — %s",
                 mode,
-                duplicate_of,
+                action,
+                existing_episode_id,
                 (payload_hash or "")[:12],
-                "rejected" if mode == "enforce" else "enqueued anyway (observe)",
+                "rejected" if action == "rejected" else "enqueued anyway",
             )
         except Exception:  # pragma: no cover - defensive only
-            pass
+            logger.debug("could not record dedup event", exc_info=True)
 
     def _find_active_duplicate_sync(self, payload_hash: str) -> Optional[str]:
         """Return episode_id of a row with this hash in an ACTIVE status.
@@ -513,15 +879,15 @@ class EpisodeQueue:
         Active = ``queued`` or ``processing``. Rows in ``done`` / ``failed``
         / ``aborted`` do NOT block: re-queueing after a permanent failure
         is a legitimate retry, and blocking it would strand the row.
+
+        The lookup itself lives in ``core.dedup`` so the MCP writer and
+        the daemon writer search the SAME population. They used to carry
+        separate copies of this query, and separate copies of the
+        "which statuses are active" answer — which is precisely how the
+        two writers drifted apart in the first place.
         """
         with self._get_connection() as conn:
-            row = conn.execute(
-                "SELECT id FROM episodes "
-                "WHERE payload_hash = ? AND status IN ('queued', 'processing') "
-                "ORDER BY created_at DESC LIMIT 1",
-                (payload_hash,),
-            ).fetchone()
-            return row[0] if row else None
+            return find_active_duplicate(conn, payload_hash)
 
     def _insert_sync(
         self,
@@ -529,6 +895,8 @@ class EpisodeQueue:
         payload_json: str,
         now: str,
         payload_hash: Optional[str],
+        dedup_gate: str = "off",
+        canonical_hash: Optional[str] = None,
     ) -> None:
         """INSERT one episode row, optionally stamping the payload hash.
 
@@ -536,37 +904,86 @@ class EpisodeQueue:
         statement as the row itself. Splitting them would leave a window
         where the row is visible to another writer WITHOUT its hash — and
         that window is exactly what breaks dedup.
+
+        TWO HASH COLUMNS, TWO JOBS
+        -------------------------
+        ``payload_hash`` (LEGACY) is stamped only when the mode is not
+        ``off``. Its "off means no hash at all" behaviour is the
+        pre-1b contract and the 1b test suite pins it.
+
+        ``canonical_hash`` (AUTHORITATIVE) is stamped ALWAYS, in every
+        mode, because it is NOT a gate — it is a content address. The
+        mode decides whether a duplicate is REJECTED; the hash only says
+        what the content is.
+
+        That distinction matters concretely: the processing-layer
+        backstop asks "was this exact content already ingested?". If a
+        row written in ``off`` mode carried no hash, the backstop could
+        not see it and would answer "no" for the entire pre-migration
+        population — a silent hole. Hashing every row costs one sha256
+        per write and closes it.
+
+        The UNIQUE index is unaffected: it only covers rows whose
+        ``dedup_gate = 'enforce'``, so ``off``-mode rows stay
+        duplicate-able and observe-mode rows stay duplicate-able (observe
+        must never reject).
+
+        Raises ``DuplicateRaceError`` when the UNIQUE partial index
+        rejects the INSERT — i.e. another writer inserted the same
+        ACTIVE payload between the pre-check and this statement. The
+        enqueue path translates it into the mode's policy.
         """
         with self._get_connection() as conn:
             if payload_hash is None:
-                conn.execute(
-                    """
-                    INSERT INTO episodes (
-                        id, status, payload_json, enqueued_at, attempt_count,
-                        consecutive_failures, created_at, updated_at
-                    ) VALUES (?, 'queued', ?, ?, 0, 0, ?, ?)
-                    """,
-                    (ep_id, payload_json, now, now, now),
-                )
-            else:
+                # off mode: no legacy hash, but the canonical content
+                # address is still stamped (see the docstring).
                 conn.execute(
                     """
                     INSERT INTO episodes (
                         id, status, payload_json, enqueued_at, attempt_count,
                         consecutive_failures, created_at, updated_at,
-                        payload_hash, claimed_by
+                        dedup_gate, canonical_hash
                     ) VALUES (?, 'queued', ?, ?, 0, 0, ?, ?, ?, ?)
                     """,
-                    (
-                        ep_id,
-                        payload_json,
-                        now,
-                        now,
-                        now,
-                        payload_hash,
-                        f"mcp:{os.getpid()}",
-                    ),
+                    (ep_id, payload_json, now, now, now, dedup_gate, canonical_hash),
                 )
+            else:
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO episodes (
+                            id, status, payload_json, enqueued_at, attempt_count,
+                            consecutive_failures, created_at, updated_at,
+                            payload_hash, claimed_by, canonical_hash, dedup_gate
+                        ) VALUES (?, 'queued', ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            ep_id,
+                            payload_json,
+                            now,
+                            now,
+                            now,
+                            payload_hash,
+                            f"mcp:{os.getpid()}",
+                            canonical_hash if canonical_hash is not None else payload_hash,
+                            dedup_gate,
+                        ),
+                    )
+                except sqlite3.IntegrityError as err:
+                    # The UNIQUE index fired. Find out WHO holds the hash so
+                    # the caller can be told the existing episode id.
+                    #
+                    # Two lookups: the ACTIVE one first (the usual case),
+                    # then a status-agnostic fallback for the rare case
+                    # where the holder left the active set in the
+                    # microseconds between the rejected INSERT and this
+                    # lookup. The fallback names a REAL row that really
+                    # holds this payload, so the reported id is truthful
+                    # even in that race.
+                    existing = find_active_duplicate(conn, payload_hash)
+                    if existing is None:
+                        existing = find_any_duplicate(conn, payload_hash)
+                    raise DuplicateRaceError(existing, payload_hash) from err
             conn.commit()
 
     async def claim_next_batch(self, limit: Optional[int] = 20) -> List[EpisodeRecord]:
@@ -802,16 +1219,53 @@ class EpisodeQueue:
                         # original value made it a live second feeder of the
                         # queue head — the same clause that closes the
                         # self-feeding reap loop.
-                        conn.execute(
-                            """
-                            UPDATE episodes
-                            SET status = 'queued', attempt_count = ?,
-                                consecutive_failures = 0,
-                                enqueued_at = ?, updated_at = ?
-                            WHERE id = ?
-                            """,
-                            (attempts, now, now, ep_id),
-                        )
+                        #
+                        # The UPDATE moves the row INTO the UNIQUE index's
+                        # scope, so it can conflict (the canonical hash is
+                        # already held by another active row). A SAVEPOINT
+                        # keeps that conflict local to THIS row: without it
+                        # the exception would abort the whole reap batch.
+                        conn.execute("SAVEPOINT janus_dedup_reap_stuck")
+                        try:
+                            conn.execute(
+                                """
+                                UPDATE episodes
+                                SET status = 'queued', attempt_count = ?,
+                                    consecutive_failures = 0,
+                                    enqueued_at = ?, updated_at = ?
+                                WHERE id = ?
+                                """,
+                                (attempts, now, now, ep_id),
+                            )
+                        except sqlite3.IntegrityError as err:
+                            conn.execute("ROLLBACK TO janus_dedup_reap_stuck")
+                            conn.execute("RELEASE janus_dedup_reap_stuck")
+                            logger.info(
+                                "reap skipped episode %s: canonical hash already "
+                                "held by an active row (%s)",
+                                ep_id,
+                                err,
+                            )
+                            # Not a failure — the payload is in flight
+                            # elsewhere. Mark it terminal so the reaper
+                            # does not pick it up again every tick, but do
+                            # NOT send it to the DLQ.
+                            conn.execute(
+                                """
+                                UPDATE episodes
+                                SET status = ?, updated_at = ?, last_error = ?
+                                WHERE id = ?
+                                """,
+                                (
+                                    BACKSTOP_SKIPPED_STATUS,
+                                    now,
+                                    "reaped: canonical hash already held by an active row",
+                                    ep_id,
+                                ),
+                            )
+                            reaped_count += 1
+                            continue
+                        conn.execute("RELEASE janus_dedup_reap_stuck")
                     reaped_count += 1
                 conn.commit()
                 return reaped_count
@@ -901,20 +1355,27 @@ class EpisodeQueue:
                 ids = [r["id"] for r in cur.fetchall()]
                 if not ids:
                     return 0
-                placeholders = ",".join("?" * len(ids))
                 # (2) refresh ``enqueued_at`` — the clause that closes the
                 # self-feeding loop. ``attempt_count`` is NOT reset (it is
                 # the escalation signal read by ``should_retry``);
                 # ``consecutive_failures`` IS reset, because it is written in
                 # exactly one place and read in zero, so resetting it makes
                 # the column mean what its name says.
-                conn.execute(
-                    f"UPDATE episodes SET status = 'queued', enqueued_at = ?, "
-                    f"consecutive_failures = 0, updated_at = ? WHERE id IN ({placeholders})",
-                    [now, now] + ids,
+                #
+                # The UPDATE moves rows INTO the UNIQUE index's scope, so a
+                # row whose canonical hash is already held by an active row
+                # would raise IntegrityError. ``requeue_guarded`` runs each
+                # row in a SAVEPOINT so one conflict cannot abort the whole
+                # batch — without that, a single conflicting row would
+                # leave the other N-1 rows unreaped for the night.
+                requeued = requeue_guarded(
+                    conn,
+                    ids,
+                    now=now,
+                    extra_set="consecutive_failures = 0",
                 )
                 conn.commit()
-                return len(ids)
+                return len(requeued)
 
         async with self._write_lock:
             return await asyncio.to_thread(_sync_reap_failed)
@@ -971,11 +1432,22 @@ class EpisodeQueue:
                     ).fetchone()
                     if check is None:
                         return False
-                conn.execute(
-                    "UPDATE episodes SET status = 'queued', attempt_count = 0, last_error = NULL,"
-                    " enqueued_at = ?, updated_at = ?, last_replay_at = ? WHERE id = ?",
-                    (now, now, now, episode_id),
+                # The UPDATE moves the row INTO the UNIQUE index's scope,
+                # so it can conflict with another active row holding the
+                # same canonical hash. A SAVEPOINT keeps the conflict
+                # local: without it the IntegrityError would abort the
+                # replay AND leave the dead_letter row marked recovered
+                # while the episode is still dead.
+                requeued = requeue_guarded(
+                    conn,
+                    [episode_id],
+                    now=now,
+                    extra_set="attempt_count = 0, last_error = NULL, last_replay_at = ?",
+                    extra_params=[now],
                 )
+                if not requeued:
+                    conn.rollback()
+                    return False
                 conn.execute(
                     "UPDATE dead_letter SET recovered_at = ?, recovered_attempts = ? WHERE episode_id = ?",
                     (now, dlq_row["attempt_count"], episode_id),
@@ -1062,12 +1534,35 @@ class EpisodeQueue:
                     # into the graph. measured 2026-10-12: mark_done now
                     # closes the DLQ row, so this can only be reached by a
                     # pre-existing stale row, but the guard is cheap.
-                    cur = conn.execute(
-                        "UPDATE episodes SET status = 'queued', attempt_count = 0,"
-                        " last_error = NULL, enqueued_at = ?, updated_at = ?, last_replay_at = ?"
-                        " WHERE id = ? AND status != 'done'",
-                        (now, now, now, ep_id),
-                    )
+                    #
+                    # The UPDATE moves the row INTO the UNIQUE index's
+                    # scope, so it can conflict with another active row
+                    # holding the same canonical hash. A SAVEPOINT keeps
+                    # the conflict local to this row — otherwise one
+                    # conflicting row would abort the WHOLE batch replay.
+                    conn.execute("SAVEPOINT janus_dedup_replay_batch")
+                    try:
+                        cur = conn.execute(
+                            "UPDATE episodes SET status = 'queued', attempt_count = 0,"
+                            " last_error = NULL, enqueued_at = ?, updated_at = ?, last_replay_at = ?"
+                            " WHERE id = ? AND status != 'done'",
+                            (now, now, now, ep_id),
+                        )
+                    except sqlite3.IntegrityError as err:
+                        conn.execute("ROLLBACK TO janus_dedup_replay_batch")
+                        conn.execute("RELEASE janus_dedup_replay_batch")
+                        logger.info(
+                            "dlq batch replay skipped episode %s: canonical hash "
+                            "already held by an active row (%s)",
+                            ep_id,
+                            err,
+                        )
+                        # The row stays dead — it was NOT replayed, so the
+                        # dead_letter row must stay open (not marked
+                        # recovered). Leaving it open is correct: the
+                        # episode is still not done.
+                        continue
+                    conn.execute("RELEASE janus_dedup_replay_batch")
                     if cur.rowcount == 0:
                         # Episode is done (or gone): close the dead-letter row
                         # so it stops being counted as open, but do not claim
@@ -1389,16 +1884,34 @@ class EpisodeQueue:
 
         Keys:
           mode              — the effective mode for the NEXT enqueue.
-          observed_hits     — duplicates detected since process start.
+          observed_hits     — duplicates DETECTED, read from the durable
+                              ``dedup_events`` ledger. It is a CROSS-PROCESS
+                              number: it survives the process that detected
+                              the duplicate, which is the whole point — the
+                              PicoClaw hook spawns a fresh python per write,
+                              so a RAM counter was always 0 here.
           hashed_rows       — rows in the DB carrying a payload_hash.
+          canonical_rows    — rows carrying a canonical_hash (the
+                              enforceable column).
           active_duplicates — rows sharing a payload_hash while still
                               active (queued/processing). This is the number
                               that says "the enforce gate would reject N
                               rows right now".
+          backstop_skips    — rows skipped by the processing-layer
+                              backstop (i.e. content that had already been
+                              ingested when the row was claimed).
+
+        ``observed_hits`` counts EVENTS, not distinct payloads: the same
+        payload detected twice is two events. That matches what an
+        operator wants to know ("how much duplicate traffic did we see"),
+        not "how many distinct payloads were duplicated".
         """
         with self._get_connection() as conn:
             hashed = conn.execute(
                 "SELECT COUNT(*) as count FROM episodes WHERE payload_hash IS NOT NULL"
+            ).fetchone()["count"]
+            canonical = conn.execute(
+                "SELECT COUNT(*) as count FROM episodes WHERE canonical_hash IS NOT NULL"
             ).fetchone()["count"]
             active_dupes = conn.execute(
                 "SELECT COUNT(*) as count FROM ("
@@ -1408,12 +1921,139 @@ class EpisodeQueue:
                 "  GROUP BY payload_hash HAVING COUNT(*) > 1"
                 ")"
             ).fetchone()["count"]
+            # Durable counter. Read from the ledger, NOT from the RAM
+            # attribute: the ledger survives the process that wrote it.
+            try:
+                ledger_hits = conn.execute(
+                    "SELECT COUNT(*) as count FROM dedup_events"
+                ).fetchone()["count"]
+            except sqlite3.Error:
+                # The ledger table is missing (a DB created before this
+                # migration and never re-opened). Fall back to the
+                # process-local counter rather than failing the read.
+                ledger_hits = None
+            try:
+                backstop_skips = conn.execute(
+                    "SELECT COUNT(*) as count FROM episodes WHERE status = ?",
+                    (BACKSTOP_SKIPPED_STATUS,),
+                ).fetchone()["count"]
+            except sqlite3.Error:
+                backstop_skips = 0
+
+        observed_hits = ledger_hits if ledger_hits is not None else self._dedup_hits
         return {
             "mode": _resolve_dedup_mode(),
-            "observed_hits": self._dedup_hits,
+            "observed_hits": int(observed_hits),
             "hashed_rows": int(hashed),
+            "canonical_rows": int(canonical),
             "active_duplicates": int(active_dupes),
+            "backstop_skips": int(backstop_skips),
         }
+
+    def get_recent_dedup_events(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return the most recent dedup ledger rows, newest first.
+
+        The counter says HOW MANY; this says WHAT. An operator deciding
+        whether to switch to ``enforce`` needs to see the payloads and
+        the writer that produced them, not just a number.
+        """
+        try:
+            with self._get_connection() as conn:
+                return recent_dedup_events(conn, limit=limit)
+        except sqlite3.Error:
+            return []
+
+    def find_ingested_duplicate_sync(self, payload_hash: str) -> Optional[str]:
+        """Return the id of a row whose payload was ALREADY INGESTED.
+
+        "Ingested" = ``status = 'done'`` — the content reached the graph.
+        This is the lookup the processing-layer backstop uses, and it is
+        deliberately WIDER than the enqueue gate's active-only lookup: by
+        the time the backstop runs, the first row has usually left the
+        active set, so an active-only check would find nothing.
+
+        It is also the risky one: suppressing a legitimate re-ingestion
+        loses information. That is why the backstop is opt-in and
+        default-off (see ``config.DedupBackstopSettings``).
+        """
+        if not payload_hash:
+            return None
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM episodes WHERE "
+                "(canonical_hash = ? OR (canonical_hash IS NULL AND payload_hash = ?)) "
+                "AND status = 'done' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (payload_hash, payload_hash),
+            ).fetchone()
+            if row is None:
+                return None
+            return row[0] if not isinstance(row, sqlite3.Row) else row["id"]
+
+    async def mark_skipped_duplicate(
+        self,
+        episode_id: str,
+        existing_episode_id: Optional[str] = None,
+        payload_hash: Optional[str] = None,
+    ) -> None:
+        """Mark a claimed row as skipped because its payload was already ingested.
+
+        The row gets its OWN status (``skipped_duplicate``), not ``done``:
+
+          * not ``done`` — that status means "this content WAS ingested",
+            and the backstop explicitly did NOT ingest it. Reusing
+            ``done`` would inflate ``dream.py``'s ``done + queued``
+            episode count with content the graph never saw;
+          * not ``failed`` / ``aborted`` — those are failure statuses.
+            The reapers pick them up and either requeue them or push
+            them to the DLQ, so a benign skip would turn into queue
+            pressure and DLQ noise.
+
+        The row is TERMINAL: it is never claimed again (``claim_next_batch``
+        selects ``status='queued'``) and it is never dead-lettered (the
+        DLQ is written by ``mark_failed`` / ``mark_aborted`` only).
+        """
+        now = _iso_now()
+
+        def _sync_skip():
+            with self._get_connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE episodes
+                    SET status = ?, finished_at = ?, updated_at = ?,
+                        last_error = ?, consecutive_failures = 0
+                    WHERE id = ?
+                    """,
+                    (
+                        BACKSTOP_SKIPPED_STATUS,
+                        now,
+                        now,
+                        (
+                            "skipped: payload already ingested as "
+                            + (existing_episode_id or "unknown")
+                        ),
+                        episode_id,
+                    ),
+                )
+                conn.commit()
+
+        async with self._write_lock:
+            await asyncio.to_thread(_sync_skip)
+
+        if existing_episode_id or payload_hash:
+            try:
+                with self._get_connection() as conn:
+                    record_dedup_event(
+                        conn,
+                        mode="backstop",
+                        action="backstop_skipped",
+                        payload_hash=payload_hash,
+                        existing_episode_id=existing_episode_id,
+                        duplicate_episode_id=episode_id,
+                        writer=f"worker:{os.getpid()}",
+                    )
+            except Exception:  # pragma: no cover - defensive only
+                logger.debug("could not record backstop dedup event", exc_info=True)
 
     @staticmethod
     def _dlq_class_predicate(n: int) -> str:

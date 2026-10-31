@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Union, cast
+from typing import Any, Dict, Optional, Union, cast
 
 from ..config import JanusSettings, load_config
 from ..core.contracts import Settings
+from ..core.payload_hash import canonical_payload_hash
 from .queue import EpisodeQueue, EpisodeRecord
 from .retry import describe_exception, send_to_dlq, should_retry
 
@@ -28,6 +29,12 @@ class EpisodeWorker:
 
     async def process_record(self, record: EpisodeRecord, timeout_sec: float = 300.0) -> bool:
         """Process a single episode record protected by a timeout."""
+        # The backstop runs FIRST, before any Graphiti call. It is
+        # opt-in and default-off; when it skips a row it returns True
+        # (the record is handled — no ingestion needed) and the row has
+        # already been marked with its own terminal status.
+        if await self._backstop_skip_if_ingested(record):
+            return True
         try:
             return await asyncio.wait_for(self._execute_ingestion(record), timeout=timeout_sec)
         except asyncio.TimeoutError as err:
@@ -44,6 +51,103 @@ class EpisodeWorker:
             else:
                 await send_to_dlq(self.queue, record, err)
             return False
+
+    async def _backstop_skip_if_ingested(self, record: EpisodeRecord) -> bool:
+        """Skip this row when its payload was ALREADY ingested.
+
+        THE BACKSTOP, NOT THE GATE
+        --------------------------
+        The enqueue gate is the primary dedup mechanism: it is the only
+        place where the writer can still tell the caller "this is a
+        duplicate, and here is the id of the row that holds it". This
+        method is a SECOND line of defence that catches what the gate
+        structurally cannot:
+
+          * the CROSS-PROCESS race — two writers both passed the gate's
+            check before either inserted (the gate's check-then-insert is
+            a TOCTOU window across three writer processes);
+          * the "same content sent again hours later" case — by then the
+            first row has left the active set, so the gate's active-only
+            lookup finds nothing.
+
+        IT IS OPT-IN AND DEFAULT-OFF. Done-aware dedup can suppress a
+        LEGITIMATE re-ingestion (the same text re-sent because the user
+        wants it in the graph twice), and that is a data-loss failure. So
+        it must be a deliberate choice, not a default.
+
+        IT NEVER RAISES. This is load-bearing: the worker's failure path
+        routes to the DLQ, so an exception here would turn a benign skip
+        into queue pressure and DLQ noise. Every failure inside this
+        method degrades to "do not skip" — the episode is processed
+        normally, exactly as if the backstop were off.
+
+        The row is marked with a dedicated terminal status
+        (``skipped_duplicate``), never ``done`` and never a failure
+        status — see ``EpisodeQueue.mark_skipped_duplicate``.
+        """
+        try:
+            backstop = self._resolve_backstop()
+            if not backstop.get("enabled"):
+                return False
+
+            payload = record.payload
+            content = payload.get("content")
+            group_id = payload.get("group_id")
+            source_description = payload.get("source_description")
+            if content is None or group_id is None or source_description is None:
+                # Cannot compute the hash — do not skip.
+                return False
+
+            payload_hash = canonical_payload_hash(
+                content, group_id, source_description
+            )
+            existing = await asyncio.to_thread(
+                self.queue.find_ingested_duplicate_sync, payload_hash
+            )
+            if existing is None:
+                return False
+            if existing == record.id:
+                # The row IS the ingested one — never skip a row against
+                # itself.
+                return False
+
+            logger.info(
+                "backstop: skipping episode %s — payload already ingested as %s",
+                record.id,
+                existing,
+            )
+            await self.queue.mark_skipped_duplicate(
+                record.id,
+                existing_episode_id=existing,
+                payload_hash=payload_hash,
+            )
+            return True
+        except Exception as err:  # pragma: no cover - defensive only
+            # Any failure at all degrades to "do not skip".
+            logger.warning(
+                "backstop check failed for episode %s (%s) — processing normally",
+                record.id,
+                err,
+            )
+            return False
+
+    def _resolve_backstop(self) -> Dict[str, Any]:
+        """Read the backstop settings, tolerating any settings shape.
+
+        ``JanusSettings`` carries ``pipeline.dedup.backstop``;
+        ``contracts.Settings`` does not have that subtree at all (tests
+        build one). Reading it through ``getattr`` chains means an
+        absent section degrades to "disabled" instead of raising.
+        """
+        pipeline_cfg = getattr(self.settings, "pipeline", None)
+        dedup_cfg = getattr(pipeline_cfg, "dedup", None)
+        backstop = getattr(dedup_cfg, "backstop", None)
+        if backstop is None:
+            return {"enabled": False}
+        if isinstance(backstop, dict):
+            return backstop
+        enabled = getattr(backstop, "enabled", False)
+        return {"enabled": bool(enabled)}
 
     async def _execute_ingestion(self, record: EpisodeRecord) -> bool:
         # Lazy import Graphiti instance creation

@@ -30,6 +30,11 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from ..core.dedup import (
+    DEDUP_GATE_ENFORCE,
+    find_active_duplicate,
+    record_dedup_event,
+)
 from ..core.payload_hash import canonical_payload_hash
 from ..pipeline.queue import EpisodeQueue
 from .phase3_settings import DaemonLockSettings
@@ -130,11 +135,22 @@ class EpisodeQueueAdapter:
                 conn.execute("ALTER TABLE episodes ADD COLUMN payload_hash TEXT")
             if "claimed_by" not in cols:
                 conn.execute("ALTER TABLE episodes ADD COLUMN claimed_by TEXT")
+            # Canonical hash + gate column (2026-10-31). The daemon writer
+            # stamps both on every insert. See ``core.dedup`` for why the
+            # two hash columns are separate.
+            if "canonical_hash" not in cols:
+                conn.execute("ALTER TABLE episodes ADD COLUMN canonical_hash TEXT")
+            if "dedup_gate" not in cols:
+                conn.execute("ALTER TABLE episodes ADD COLUMN dedup_gate TEXT")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_episodes_payload_hash ON episodes(payload_hash)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_episodes_claimed_by ON episodes(claimed_by)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_episodes_canonical_hash "
+                "ON episodes(canonical_hash)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_episodes_status_claimed "
@@ -179,6 +195,9 @@ class EpisodeQueueAdapter:
         if existing is not None:
             # In dual_with_lock, the OTHER writer may have inserted; we treat
             # any matching hash in active status as duplicate.
+            await asyncio.to_thread(
+                self._record_dedup_event_sync, ph, existing, mode="enforce", action="rejected"
+            )
             raise EpisodeDuplicateError(existing_episode_id=existing)
 
         # 2. Enqueue + set payload_hash + claimed_by in one transaction.
@@ -215,6 +234,22 @@ class EpisodeQueueAdapter:
         Mirrors the column set used by EpisodeQueue.enqueue so the row
         matches the existing schema and the cron worker (Phase 4) can pick
         it up unchanged.
+
+        ``canonical_hash`` is stamped with the SAME digest as the legacy
+        ``payload_hash`` — the daemon writer has always used the canonical
+        scheme (``core.payload_hash``), so for every row it writes the two
+        columns agree. They are separate columns because the legacy one
+        also carries the 11 482 backfill rows whose scheme is unknown.
+
+        ``dedup_gate`` is ``'enforce'``: the daemon writer has ALWAYS
+        rejected duplicates (HTTP 409), so its rows are exactly the ones
+        the UNIQUE partial index must protect. Without this stamp the
+        index would not cover daemon rows, and the cross-process race
+        between the daemon and the MCP writer would remain open.
+
+        Raises ``EpisodeDuplicateError`` when the UNIQUE index rejects
+        the INSERT — i.e. another writer inserted the same active payload
+        between the pre-check and this statement.
         """
         import json as _json
         import uuid as _uuid
@@ -230,29 +265,76 @@ class EpisodeQueueAdapter:
         payload_json = _json.dumps(payload)
         now = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(str(self._queue.db_path), timeout=5.0) as conn:
-            conn.execute(
-                """
-                INSERT INTO episodes (
-                    id, status, payload_json, enqueued_at,
-                    started_at, finished_at,
-                    attempt_count, consecutive_failures,
-                    last_error, checkpoint,
-                    payload_hash, claimed_by,
-                    created_at, updated_at
-                ) VALUES (?, 'queued', ?, ?, NULL, NULL, 0, 0, NULL, NULL, ?, ?, ?, ?)
-                """,
-                (
-                    ep_id,  # id
-                    payload_json,  # payload_json
-                    now,  # enqueued_at
-                    payload_hash,  # payload_hash
-                    claimed_by,  # claimed_by
-                    now,  # created_at
-                    now,  # updated_at
-                ),
-            )
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO episodes (
+                        id, status, payload_json, enqueued_at,
+                        started_at, finished_at,
+                        attempt_count, consecutive_failures,
+                        last_error, checkpoint,
+                        payload_hash, claimed_by, canonical_hash, dedup_gate,
+                        created_at, updated_at
+                    ) VALUES (?, 'queued', ?, ?, NULL, NULL, 0, 0, NULL, NULL, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ep_id,  # id
+                        payload_json,  # payload_json
+                        now,  # enqueued_at
+                        payload_hash,  # payload_hash
+                        claimed_by,  # claimed_by
+                        payload_hash,  # canonical_hash
+                        DEDUP_GATE_ENFORCE,  # dedup_gate
+                        now,  # created_at
+                        now,  # updated_at
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                # The UNIQUE index fired: another writer inserted the same
+                # ACTIVE payload between the pre-check and this INSERT.
+                existing = find_active_duplicate(conn, payload_hash)
+                if existing:
+                    raise EpisodeDuplicateError(existing_episode_id=existing)
+                # No holder found — the conflict came from something else
+                # (a UNIQUE violation on another column). Re-raise so the
+                # HTTP layer reports it as an internal error rather than a
+                # misleading duplicate.
+                raise
             conn.commit()
         return ep_id
+
+    def _record_dedup_event_sync(
+        self,
+        payload_hash: str,
+        existing_episode_id: str,
+        mode: str = "enforce",
+        action: str = "rejected",
+    ) -> None:
+        """Append one row to the durable ``dedup_events`` ledger.
+
+        The daemon writer is the SECOND writer of the same table, so its
+        duplicates have to land in the SAME ledger as the MCP writer's.
+        Before this, the ledger only saw MCP-side events, and the daemon
+        — which has always rejected duplicates with HTTP 409 — reported
+        nothing. A counter that only sees one of three writers is not a
+        measure of the gate; it is a measure of one process.
+
+        Never raises: a ledger write must not be able to fail an
+        enqueue that is about to be rejected anyway.
+        """
+        try:
+            with sqlite3.connect(str(self._queue.db_path), timeout=5.0) as conn:
+                record_dedup_event(
+                    conn,
+                    mode=mode,
+                    action=action,
+                    payload_hash=payload_hash,
+                    existing_episode_id=existing_episode_id,
+                    writer=f"daemon:{os.getpid()}",
+                )
+        except Exception as err:  # pragma: no cover - defensive only
+            logger.warning("could not record dedup event: %s", err)
 
     def _find_existing_sync(self, payload_hash: str) -> Optional[str]:
         """Return episode_id if a row with this hash is in an active status.
@@ -260,15 +342,17 @@ class EpisodeQueueAdapter:
         Active statuses: queued, processing. (done / failed / aborted do NOT
         trigger dedup — caller may want to re-enqueue after a permanent
         failure.)
+
+        The lookup itself is shared with the MCP writer through
+        ``core.dedup.find_active_duplicate``. The two writers used to carry
+        SEPARATE copies of this query and of the "which statuses are
+        active" answer — which is exactly how they drifted apart in the
+        first place (the MCP writer wrote no hash at all, so this gate
+        could never see MCP rows).
         """
         with sqlite3.connect(str(self._queue.db_path), timeout=5.0) as conn:
-            row = conn.execute(
-                "SELECT id FROM episodes "
-                "WHERE payload_hash = ? AND status IN ('queued', 'processing') "
-                "ORDER BY created_at DESC LIMIT 1",
-                (payload_hash,),
-            ).fetchone()
-            return row[0] if row else None
+            conn.row_factory = sqlite3.Row
+            return find_active_duplicate(conn, payload_hash)
 
     def _stamp_claimed_by_sync(self, episode_id: str, claimed_by: Optional[str]) -> None:
         with sqlite3.connect(str(self._queue.db_path), timeout=5.0) as conn:

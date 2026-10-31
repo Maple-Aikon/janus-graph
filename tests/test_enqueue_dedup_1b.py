@@ -432,15 +432,32 @@ async def test_dedup_stats_shape():
     q = _tmp_queue()
 
     stats = q.get_dedup_stats()
-    assert set(stats) == {"mode", "observed_hits", "hashed_rows", "active_duplicates"}
+    # The shape grew on 2026-10-31 with the dedup hardening:
+    #   canonical_rows — rows carrying the enforceable canonical_hash.
+    #   backstop_skips — rows skipped by the processing-layer backstop.
+    # Both are read-only observations; neither can corrupt the
+    # ``get_stats()`` sums (that dict is untouched).
+    assert set(stats) == {
+        "mode",
+        "observed_hits",
+        "hashed_rows",
+        "active_duplicates",
+        "canonical_rows",
+        "backstop_skips",
+    }
     assert stats["observed_hits"] == 0
     assert stats["hashed_rows"] == 0
     assert stats["active_duplicates"] == 0
+    assert stats["canonical_rows"] == 0
+    assert stats["backstop_skips"] == 0
 
     await q.enqueue("a", group_id="g", source_description="s", dedup_mode="observe")
     stats = q.get_dedup_stats()
     assert stats["hashed_rows"] == 1
     assert stats["active_duplicates"] == 0
+    # observe mode stores the canonical hash too — it is the column the
+    # UNIQUE index and the backstop read.
+    assert stats["canonical_rows"] == 1
 
 
 @pytest.mark.asyncio
