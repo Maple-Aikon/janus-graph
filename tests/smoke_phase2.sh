@@ -172,6 +172,32 @@ preflight_external_db() {
         echo -e "${RED}[preflight]${NC} DEAD_PORT ($DEAD_PORT) == daemon port — the simulated outage would be a no-op"
         exit 1
     fi
+    # DEAD_PORT must actually be closed. If something else is listening there
+    # (a stray service on a CI runner, a leftover daemon), the daemon would
+    # connect to THAT instead of failing, and the "database is down" gates
+    # would silently stop testing an outage at all.
+    if "$PYTHON_BIN" - "$DEAD_PORT" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+sock = socket.socket()
+sock.settimeout(1)
+try:
+    sock.connect(("127.0.0.1", port))
+except OSError:
+    sys.exit(0)  # nothing listening — good
+else:
+    sys.exit(1)  # something IS listening — bad
+finally:
+    sock.close()
+PY
+    then
+        echo -e "${GREEN}[preflight]${NC} DEAD_PORT ($DEAD_PORT) is closed"
+    else
+        echo -e "${RED}[preflight]${NC} DEAD_PORT ($DEAD_PORT) is already in use — the simulated outage would be a no-op"
+        exit 1
+    fi
     echo -e "${YELLOW}[preflight]${NC} probing external FalkorDB at ${FALKOR_HOST}:${FALKOR_PORT}"
     if ! "$PYTHON_BIN" -c "
 from janus_graph.config import JanusSettings

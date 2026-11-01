@@ -121,6 +121,13 @@ jobs:
         # container's MODULE LIST actually reports, and what the daemon's own
         # strict probe (PING + MODULE LIST) concludes.
         #
+        # NOTE: this step talks to the container from the RUNNER, so it must
+        # NOT use the image's `redis-cli` — that binary lives inside the
+        # container, not on the runner host. Measured 2026-11-01: the first
+        # run of this job died with "redis-cli: command not found" (exit
+        # 127). The `redis` Python client is already a transitive dependency
+        # (it arrives with falkordb), so it is used instead.
+        #
         # Why the daemon's probe is the assertion that matters: janus'
         # probe_strict() only reports ALIVE when the response mentions
         # "falkordb". In this image the module reports
@@ -131,17 +138,36 @@ jobs:
         env:
           FALKORDB_HOST: 127.0.0.1
           FALKORDB_PORT: ${{ job.services.falkordb.ports['6379'] }}
+          # The daemon's probe reads its endpoint from the config, and the
+          # config reads these env vars. Without them the probe would target
+          # the DEFAULT port 6379 while the container is published on a
+          # random host port — a mismatch that would report DEAD for a
+          # perfectly healthy database.
+          JANUS_ENGINE__HOST: 127.0.0.1
+          JANUS_ENGINE__PORT: ${{ job.services.falkordb.ports['6379'] }}
+          JANUS_GRAPH_HOME: ${{ github.workspace }}/.janus-graph
         run: |
           echo "FalkorDB host port: ${FALKORDB_PORT}"
           echo "--- container MODULE LIST ---"
-          redis-cli -h "${FALKORDB_HOST}" -p "${FALKORDB_PORT}" MODULE LIST
-          echo "--- janus probe_strict ---"
-          uv run python - <<'PY'
-          import asyncio, os, sys
+          .venv/bin/python - <<'PY'
+          import asyncio
+          import os
+          import sys
+
+          import redis
+
           from janus_graph.config import JanusSettings
           from janus_graph.daemon.falkordb_supervisor import DaemonSupervisor, ProbeState
 
+          host = os.environ["FALKORDB_HOST"]
+          port = int(os.environ["FALKORDB_PORT"])
+
+          client = redis.Redis(host=host, port=port, decode_responses=True, socket_timeout=5)
+          modules = client.execute_command("MODULE", "LIST")
+          print("modules:", modules)
+
           cfg = JanusSettings()
+          print("engine endpoint =", cfg.engine.host, cfg.engine.port)
           sup = DaemonSupervisor(cfg.engine, cfg.daemon.falkor_circuit)
           state = asyncio.run(sup.probe_strict())
           print("probe_strict =", state)
