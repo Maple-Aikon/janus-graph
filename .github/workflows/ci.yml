@@ -59,6 +59,128 @@ jobs:
         run: |
           uv run pytest --cov --cov-fail-under=80 --cov-report=term-missing -q
 
+  smoke-phase2:
+    name: Phase 2 Integration Smoke
+    runs-on: ubuntu-latest
+
+    # The job runs DIRECTLY on the runner (no `container:`), so the service
+    # container is reachable on the runner's localhost at the host port the
+    # runner assigned. See "Which port?" below.
+    services:
+      falkordb:
+        # Digest-pinned, not tag-pinned. A tag can be re-pushed, which would
+        # silently change what CI tests. The digest below is the OCI index
+        # digest for v4.22.3, verified two ways on 2026-11-01:
+        #   - the registry's own `docker-content-digest` response header
+        #   - the sha256 of the index bytes themselves
+        # Both are sha256:725b74d400124862c9e0f318c56bfb3c55b97cd7f301d9dfe8685980fb3c8195
+        image: falkordb/falkordb@sha256:725b74d400124862c9e0f318c56bfb3c55b97cd7f301d9dfe8685980fb3c8195
+        ports:
+          # Container port only. GitHub maps it to a RANDOM free port on the
+          # host and publishes the assigned value in the
+          # `job.services.<id>.ports` context — so the port CANNOT be
+          # hardcoded to 6379 on the host side. It is read from that context
+          # in the step below.
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli -p 6379 ping | grep -q PONG && redis-cli -p 6379 MODULE LIST | grep -qi falkordb"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+          --health-start-period 5s
+        env:
+          # The image ships a browser (Next.js) that would otherwise start
+          # alongside the database and waste the runner's CPU. The image's
+          # own entrypoint honours BROWSER=0 (run.sh skips the browser
+          # branch when it is not "1").
+          BROWSER: "0"
+          TLS: "0"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv pip install -e ".[dev,cli]"
+
+      - name: Verify the FalkorDB service container is healthy
+        # The health-cmd above already gates the job (an unhealthy service
+        # container makes the runner fail the job before any step runs), but
+        # the failure message is generic. This step prints the facts that
+        # make a red run diagnosable: which host port was assigned, what the
+        # container's MODULE LIST actually reports, and what the daemon's own
+        # strict probe (PING + MODULE LIST) concludes.
+        #
+        # Why the daemon's probe is the assertion that matters: janus'
+        # probe_strict() only reports ALIVE when the response mentions
+        # "falkordb". In this image the module reports
+        #   name=graph  path=/var/lib/falkordb/bin/falkordb.so
+        # so the match comes from the path. A plain redis-server would answer
+        # PING but fail this check — which is exactly the "redislite zombie"
+        # case the probe was written to catch.
+        env:
+          FALKORDB_HOST: 127.0.0.1
+          FALKORDB_PORT: ${{ job.services.falkordb.ports['6379'] }}
+        run: |
+          echo "FalkorDB host port: ${FALKORDB_PORT}"
+          echo "--- container MODULE LIST ---"
+          redis-cli -h "${FALKORDB_HOST}" -p "${FALKORDB_PORT}" MODULE LIST
+          echo "--- janus probe_strict ---"
+          uv run python - <<'PY'
+          import asyncio, os, sys
+          from janus_graph.config import JanusSettings
+          from janus_graph.daemon.falkordb_supervisor import DaemonSupervisor, ProbeState
+
+          cfg = JanusSettings()
+          sup = DaemonSupervisor(cfg.engine, cfg.daemon.falkor_circuit)
+          state = asyncio.run(sup.probe_strict())
+          print("probe_strict =", state)
+          if state is not ProbeState.ALIVE:
+              print("FATAL: the FalkorDB service container is not usable", file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Run Phase 2 integration smoke gates
+        # The smoke script runs the daemon against the service container:
+        #   T1  happy path      → /health 200 + status=ready
+        #   T6  database down   → /health 503 + status=degraded
+        #   T8  circuit breaker → circuit opens, probes skipped in cooldown
+        #   T9  OPEN preserves  → /health still 503 with the full body
+        #
+        # JANUS_EXTERNAL_FALKOR=1 tells the script the database belongs to
+        # somebody else: it must not start, stop or kill it. The "database is
+        # down" gates are then simulated by pointing the daemon at a closed
+        # port, which produces the same observable state (probe DEAD →
+        # breaker counts the failure → /health 503) without touching the
+        # service container.
+        env:
+          JANUS_EXTERNAL_FALKOR: "1"
+          JANUS_ENGINE__HOST: 127.0.0.1
+          JANUS_ENGINE__PORT: ${{ job.services.falkordb.ports['6379'] }}
+          JANUS_DAEMON__HTTP__PORT: "8765"
+          # A port nothing listens on, used to simulate the outage.
+          JANUS_SMOKE_DEAD_PORT: "6399"
+          # Keep the daemon's runtime state inside the workspace and keep the
+          # nightly cron/dream loop out of CI.
+          JANUS_GRAPH_HOME: ${{ github.workspace }}/.janus-graph
+          JANUS_DAEMON__CRON_ENABLED: "false"
+          # The smoke script imports janus_graph and graphiti_core. Both live
+          # in the venv `uv venv` created — the runner's system `python3` does
+          # NOT have them (measured 2026-11-01: ModuleNotFoundError).
+          PYTHON_BIN: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          bash tests/smoke_phase2.sh all
+
   build-cross-arch:
     name: FalkorDB Cross-Arch Build (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
