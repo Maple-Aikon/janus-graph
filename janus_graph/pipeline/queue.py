@@ -249,6 +249,39 @@ CREATE TABLE IF NOT EXISTS dream_entity_undo_log (
     FOREIGN KEY(run_id) REFERENCES dream_runs(run_id)
 );
 
+-- ─── Phase 2b undo log: byte-identical :Episodic folds (2026-11-02) ────
+--
+-- WHY A NEW TABLE rather than reusing ``dream_entity_undo_log``:
+-- that table's schema is Entity-shaped (``source_node_uuid`` /
+-- ``target_node_uuid`` / ``source_node_snapshot`` / ``edge_uuids_redirected``)
+-- and, more to the point, NOTHING EVER WROTE TO IT — it has existed since the
+-- schema was written and still had 0 rows after 15 dream runs (measured
+-- 2026-11-02). A table with no writer is not an undo path.
+--
+-- An Episodic fold is also a different shape of operation: the victim is an
+-- ``:Episodic`` NODE whose MENTIONS edges are rewired to a survivor, and
+-- the node itself is deleted. The Entity table records a merge between two
+-- Entities; recording an Episodic fold in it would make the row read as an
+-- Entity merge and would not describe what was actually deleted.
+--
+-- ``node_snapshot`` holds the victim's full property map, so a restore can
+-- recreate the node verbatim. ``mentions`` holds the JSON list of the
+-- MENTIONS rows that were rewired or dropped, so a restore can put the
+-- edges back.
+CREATE TABLE IF NOT EXISTS dream_episodic_undo_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    victim_uuid TEXT NOT NULL,
+    survivor_uuid TEXT NOT NULL,
+    node_snapshot TEXT NOT NULL,
+    mentions TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES dream_runs(run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dream_episodic_undo_run_id
+    ON dream_episodic_undo_log(run_id);
+
 -- ─── dedup ledger (2026-10-31) ────────────────────────────────────────
 -- Durable record of every duplicate DETECTED by the enqueue gate.
 --
@@ -1657,6 +1690,94 @@ class EpisodeQueue:
 
         async with self._write_lock:
             await asyncio.to_thread(_sync_record)
+
+    async def record_episodic_undo(
+        self,
+        run_id: str,
+        rows: List[Dict[str, Any]],
+    ) -> int:
+        """INSERT the Phase 2b undo rows for byte-identical Episodic folds.
+
+        One row per victim, written BEFORE the victim node is deleted. The
+        row carries the victim's full property map (``node_snapshot``) and
+        the MENTIONS rows that were rewired or dropped (``mentions``), so a
+        restore can put both the node and its edges back.
+
+        ``rows`` is a list of dicts with the keys ``victim_uuid``,
+        ``survivor_uuid``, ``node_snapshot`` (a JSON string) and ``mentions``
+        (a JSON string).
+
+        Returns the number of rows written. A zero here means the undo path
+        is EMPTY, which the caller must treat as a reason NOT to delete the
+        nodes — not as a success.
+        """
+
+        def _sync_record():
+            with self._get_connection() as conn:
+                conn.executemany(
+                    """
+                    INSERT INTO dream_episodic_undo_log (
+                        run_id, victim_uuid, survivor_uuid,
+                        node_snapshot, mentions, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            run_id,
+                            r["victim_uuid"],
+                            r["survivor_uuid"],
+                            r["node_snapshot"],
+                            r["mentions"],
+                            r.get("created_at") or _iso_now(),
+                        )
+                        for r in rows
+                    ],
+                )
+                conn.commit()
+                return len(rows)
+
+        async with self._write_lock:
+            return await asyncio.to_thread(_sync_record)
+
+    def record_episodic_undo_sync(
+        self,
+        run_id: str,
+        rows: List[Dict[str, Any]],
+    ) -> int:
+        """Synchronous writer for the Phase 2b Episodic undo log.
+
+        ``apply_episodic_plan`` is a SYNCHRONOUS function (it talks to
+        FalkorDB over a sync socket), so it cannot await the async
+        ``record_episodic_undo``. This is the sync counterpart, sharing the
+        same table and the same column list.
+
+        Returns the number of rows written. Zero means the undo path is
+        EMPTY — the caller must then refuse to delete the victim nodes.
+        """
+        if not rows:
+            return 0
+        with self._get_connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO dream_episodic_undo_log (
+                    run_id, victim_uuid, survivor_uuid,
+                    node_snapshot, mentions, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        r["victim_uuid"],
+                        r["survivor_uuid"],
+                        r["node_snapshot"],
+                        r["mentions"],
+                        r.get("created_at") or _iso_now(),
+                    )
+                    for r in rows
+                ],
+            )
+            conn.commit()
+            return len(rows)
 
     async def update_dream_run(
         self,

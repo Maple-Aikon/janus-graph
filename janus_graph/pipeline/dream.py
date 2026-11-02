@@ -256,7 +256,13 @@ async def run_dream_consolidation(
     try:
         from .dedup_apply import run_phase2_dedup
 
-        phase2 = run_phase2_dedup(cfg, dedup_group, force=force or dedup_apply)
+        phase2 = run_phase2_dedup(
+            cfg,
+            dedup_group,
+            force=force or dedup_apply,
+            queue=queue,
+            run_id=run_id,
+        )
         phase2_status = phase2.get("status", "FAILED")
         # Show the reason too. `detail or reason` dropped ``reason`` whenever
         # both were present, which is exactly the case that matters: a SKIPPED
@@ -265,15 +271,24 @@ async def run_dream_consolidation(
         results["phase_2_deduplication"] = "%s (%s)" % (phase2_status, detail)
         results["phase_2_detail"] = phase2
         results["phase_2_merges"] = phase2.get("merges", 0)
+        # The Episodic half. Reported as its own numbers so an operator can
+        # see how many byte-identical episodes were found and folded —
+        # without them, a run that folded 249 episodes and merged 0 Entities
+        # reads exactly like a run that did nothing.
+        results["phase_2_episodic_merges"] = phase2.get("episodic_merges", 0)
+        results["phase_2_episodics_seen"] = phase2.get("episodics_seen", 0)
+        episodic_counters = phase2.get("episodic_counters") or {}
+        results["phase_2_episodic_counters"] = episodic_counters
         # Real graph size, not the hardcoded 0 this used to report. Taken from
         # the snapshot Phase 2 already read, so it costs no extra query.
         seen = phase2.get("entities_seen")
         if isinstance(seen, int):
             results["nodes_before"] = seen
         logger.info(
-            "dream: phase_2_deduplication %s merges=%s applied=%s",
+            "dream: phase_2_deduplication %s merges=%s episodic_merges=%s applied=%s",
             phase2_status,
             phase2.get("merges", 0),
+            phase2.get("episodic_merges", 0),
             phase2.get("applied", False),
         )
     except Exception as err:  # noqa: BLE001 - a dedup failure must not kill the run

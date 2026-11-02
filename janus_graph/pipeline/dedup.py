@@ -19,6 +19,7 @@ only nodes whose summaries are near-restatements of each other.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -27,9 +28,11 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 __all__ = [
     "DEFAULT_DEDUP_THRESHOLD",
     "DedupPlan",
+    "EpisodicMerge",
     "escape_cypher_string",
     "jaccard",
     "plan_dedup",
+    "plan_episodic_exact_dups",
     "tokenize",
 ]
 
@@ -99,6 +102,104 @@ class Merge:
 
 
 @dataclass
+class EpisodicMerge:
+    """One planned EPISODIC fold: ``victim_uuid`` folds into ``survivor_uuid``.
+
+    Separate from :class:`Merge` on purpose. An Entity merge is a *semantic*
+    judgement (two summaries restate each other above a Jaccard threshold);
+    an Episodic merge is a *byte-identity* judgement (same name AND same
+    content, exactly). Mixing them in one list would let a caller apply the
+    wrong guard to the wrong node type — the Entity phases match
+    ``(v:Entity)`` and would silently match ZERO Episodic victims.
+    """
+
+    name: str
+    survivor_uuid: str
+    victim_uuid: str
+    content_len: int
+
+    @property
+    def similarity(self) -> float:
+        """Exact duplicates are similarity 1.0 by construction."""
+        return 1.0
+
+
+def _content_key(content: Optional[str]) -> str:
+    """Stable content fingerprint used to group byte-identical episodes.
+
+    SHA-1 (not MD5, not Python's ``hash``): the value must be identical
+    across processes and across restarts, because the plan is recomputed by
+    the nightly cron in a fresh process. ``hash()`` is salted per process
+    and would silently stop matching after a restart.
+    """
+    return hashlib.sha1((content or "").encode("utf-8")).hexdigest()
+
+
+def _pick_episodic_survivor(nodes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Choose which byte-identical episode survives.
+
+    Policy: **earliest ``created_at``**, tie-break **lowest ``uuid``**.
+
+    Deliberately NOT :func:`_pick_survivor` (the Entity policy, which prefers
+    the longest summary): for byte-identical content the summary length is
+    identical by construction, so the Entity rule degenerates into "sort by
+    created_at, then uuid" — the same answer, but reached through a rule whose
+    first clause is meaningless here. Stating the real policy keeps the
+    choice auditable.
+
+    Rationale is measured: on the 2026-11-02 live snapshot this policy picks
+    the same survivor as "earliest created_at, then lowest uuid" in 225/225
+    exact-duplicate groups (differ = 0), so there is no drift to explain.
+    """
+    return sorted(
+        nodes,
+        key=lambda n: (str(n.get("created_at") or ""), str(n.get("uuid") or "")),
+    )[0]
+
+
+def plan_episodic_exact_dups(
+    episodics: Iterable[Dict[str, Any]],
+) -> List[EpisodicMerge]:
+    """Plan byte-identical ``:Episodic`` folds.
+
+    Two episodes are duplicates when BOTH their ``name`` AND their ``content``
+    match exactly. The name is part of the key on purpose: dropping it would
+    merge episodes whose content happens to be identical but whose ``name``
+    carries a different session/context — measured on the 2026-11-02 live
+    snapshot, 397 content-hash groups carry more than one distinct name, so
+    a content-only key would merge across session boundaries.
+
+    Exact-byte matching (not Jaccard) is the right test here: an Episodic
+    episode IS its content. Two episodes with 95 %-similar text are two
+    different memories; two episodes with identical text are the same
+    memory written twice.
+    """
+    by_key: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+    for node in episodics:
+        name = str(node.get("name") or "")
+        by_key[(name, _content_key(node.get("content")))].append(node)
+
+    merges: List[EpisodicMerge] = []
+    for (name, _key), nodes in by_key.items():
+        if len(nodes) < 2:
+            continue
+        keeper = _pick_episodic_survivor(nodes)
+        for node in nodes:
+            victim_uuid = str(node.get("uuid") or "")
+            if not victim_uuid or victim_uuid == str(keeper.get("uuid") or ""):
+                continue
+            merges.append(
+                EpisodicMerge(
+                    name=name,
+                    survivor_uuid=str(keeper.get("uuid") or ""),
+                    victim_uuid=victim_uuid,
+                    content_len=len(node.get("content") or ""),
+                )
+            )
+    return merges
+
+
+@dataclass
 class DedupPlan:
     """The full outcome of planning, with enough detail to explain itself."""
 
@@ -119,6 +220,24 @@ class DedupPlan:
     nodes_to_delete: int = 0
     summary_chars_saved: int = 0
     threshold: float = DEFAULT_DEDUP_THRESHOLD
+
+    # ─── Phase 2b: Episodic exact-duplicate folding ─────────────────────
+    #: Number of byte-identical ``:Episodic`` groups seen (a group with
+    #: >= 2 members). Reported so an operator can tell "nothing to do" from
+    #: "the read found nothing" -- the difference the old bare ``merged=0``
+    #: never made.
+    episodic_clusters_scanned: int = 0
+    #: Number of Episodic nodes that are byte-identical duplicates of a
+    #: sibling (the victims).
+    episodic_duplicate_nodes: int = 0
+    #: Highest Jaccard similarity observed between two Entity summaries in
+    #: the SAME duplicate-name cluster, regardless of whether it reached the
+    #: threshold. This is the number that makes ``merged=0`` explicable:
+    #: "0 mergeable pairs at threshold X; max observed similarity Y".
+    max_observed_similarity: float = 0.0
+    #: Duplicate-name Entity clusters that contained at least one pair at or
+    #: above the threshold.
+    mergeable_clusters: int = 0
 
     @property
     def is_empty(self) -> bool:
@@ -143,6 +262,10 @@ class DedupPlan:
             "self_loops_dropped": self.self_loops_dropped,
             "relations_removed_total": self.total_relations_removed,
             "summary_chars_saved": self.summary_chars_saved,
+            "episodic_clusters_scanned": self.episodic_clusters_scanned,
+            "episodic_duplicate_nodes": self.episodic_duplicate_nodes,
+            "max_observed_similarity": self.max_observed_similarity,
+            "mergeable_clusters": self.mergeable_clusters,
         }
 
     def describe(self) -> str:
@@ -150,6 +273,13 @@ class DedupPlan:
 
         Must never read as bare "DONE" -- that literal is what made the
         original no-op indistinguishable from real work.
+
+        It must also never read as bare ``merged=0``: the whole point of the
+        Phase 3 report is that an operator can tell "nothing was mergeable"
+        from "nothing was LOOKED at". When no Entity pair reached the
+        threshold, the sentence says so explicitly and gives the highest
+        similarity that WAS observed, so the zero is explained rather than
+        merely stated.
         """
         head = (
             "DONE (scanned={clusters_scanned} dup-name clusters / "
@@ -160,7 +290,21 @@ class DedupPlan:
             "(={relations_to_drop} dup + {self_loops_dropped} self-loop), "
             "saved={summary_chars_saved} summary chars, threshold={threshold})"
         )
-        return head.format(**self.as_dict())
+        text = head.format(**self.as_dict())
+        # Episodic half — always present, so a reader never has to guess
+        # whether the phase even looked at :Episodic nodes.
+        text += (
+            " | EPISODIC: scanned={episodic_clusters_scanned} exact-dup clusters / "
+            "{episodic_duplicate_nodes} duplicate nodes".format(**self.as_dict())
+        )
+        if not self.merges:
+            # The zero is EXPLAINED, not just stated.
+            text += (
+                "; 0 mergeable Entity pairs at threshold {threshold}; "
+                "max observed similarity {max_observed_similarity:.4f} "
+                "across {mergeable_clusters} mergeable clusters".format(**self.as_dict())
+            )
+        return text
 
 
 def _pick_survivor(nodes: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -223,16 +367,24 @@ def plan_dedup(
         remaining = list(nodes)
         while len(remaining) > 1:
             best: Optional[Tuple[float, Dict[str, Any], Dict[str, Any]]] = None
+            # The highest similarity SEEN in this cluster, whether or not it
+            # reaches the threshold. This is what turns ``merged=0`` from a
+            # bare number into an explained one: "0 mergeable pairs at
+            # threshold 0.80; max observed similarity 0.7778" tells the
+            # operator the gap, not just the zero.
             for i in range(len(remaining)):
                 for j in range(i + 1, len(remaining)):
                     score = jaccard(
                         tokenize(remaining[i].get("summary")),
                         tokenize(remaining[j].get("summary")),
                     )
+                    if score > plan.max_observed_similarity:
+                        plan.max_observed_similarity = score
                     if score >= threshold and (best is None or score > best[0]):
                         best = (score, remaining[i], remaining[j])
             if best is None:
                 break
+            plan.mergeable_clusters += 1
             score, a, b = best
             # _pick_survivor returns the survivor; the other one is the victim.
             keeper = _pick_survivor([a, b])
