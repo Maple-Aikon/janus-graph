@@ -68,11 +68,20 @@ async def episode_adapter(daemon_only_settings):
 
     Calls ``await adapter.start()`` so schema migration runs before any
     enqueue — the adapter enforces this contract.
+
+    ``dedup_mode="enforce"`` is EXPLICIT because the daemon's dedup
+    policy is config-driven as of 2026-11-02: the adapter now reads
+    ``cfg.pipeline.dedup.mode`` instead of hardcoding ``enforce``. The
+    test config resolves to ``off`` (the safe default), so a fixture
+    that relied on the implicit value would silently stop testing the
+    reject path. The three modes are covered exhaustively in
+    ``tests/test_daemon_dedup_config.py``.
     """
     queue = EpisodeQueue(db_path=daemon_only_settings.pipeline.queue_db_path)
     adapter = EpisodeQueueAdapter(
         queue=queue,
         lock_settings=daemon_only_settings.daemon.lock,
+        dedup_mode="enforce",
     )
     await adapter.start()
     return adapter
@@ -177,6 +186,10 @@ async def http_client_daemon_only(daemon_only_settings):
     adapter = EpisodeQueueAdapter(
         queue=queue,
         lock_settings=daemon_only_settings.daemon.lock,
+        # Explicit: the daemon's dedup mode is config-driven (see
+        # tests/test_daemon_dedup_config.py). This fixture tests the
+        # REJECT path, so it must ask for enforce explicitly.
+        dedup_mode="enforce",
     )
     await adapter.start()
     ctx = DaemonContext(

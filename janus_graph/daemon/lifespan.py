@@ -146,12 +146,18 @@ async def _build_phase3_components(ctx: DaemonContext) -> None:
     ctx.queue_adapter = EpisodeQueueAdapter(
         queue=ctx.queue,
         lock_settings=ctx.settings.daemon.lock,
+        # The dedup policy comes from the SAME settings object the MCP
+        # stdio server builds (``cfg.pipeline.dedup.mode``), so both
+        # writers read one config file and one value. Resolving it ONCE
+        # here keeps the config file read off the per-request path.
+        dedup_mode=ctx.settings.pipeline.dedup.mode,
     )
     await ctx.queue_adapter.start()
     logger.info(
-        "daemon: EpisodeQueueAdapter ready (db=%s, mode=%s)",
+        "daemon: EpisodeQueueAdapter ready (db=%s, lock_mode=%s, dedup_mode=%s)",
         queue_path,
         ctx.settings.daemon.lock.mode,
+        ctx.settings.pipeline.dedup.mode,
     )
 
     ctx.embedding_client = EmbeddingClient(ctx.settings.daemon.search_graph)

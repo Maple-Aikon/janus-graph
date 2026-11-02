@@ -57,12 +57,10 @@ pipeline:
   attempt_timeout_sec: 900
   cron_interval_min: 10
   drain_batch_size: 20
-  # Enqueue-level dedup on the MCP writer.
-  #
-  # The daemon HTTP writer has always had a dedup gate (it stamps
-  # payload_hash and answers 409). This switch turns the SAME gate on for
-  # the MCP stdio writer, so both writers share one hash scheme
-  # (janus_graph.core.payload_hash).
+  # Enqueue-level dedup — governs ALL THREE writers: the MCP stdio server,
+  # the PicoClaw hook, AND the daemon HTTP writer. (The daemon used to
+  # hardcode 'enforce'; since 2026-11-02 it reads this key too, so all
+  # writers share one hash scheme AND one policy.)
   #
   #   off      — no hash, no rejection. The default, and byte-for-byte the
   #              pre-1b behaviour.
@@ -73,6 +71,12 @@ pipeline:
   # "Duplicate" = same (content, group_id, source_description) as a row
   # still in status queued/processing. Rows already done/failed do NOT
   # block a new enqueue.
+  #
+  # QUOTE THE VALUE. PyYAML implements YAML 1.1, where an unquoted `off`
+  # is the BOOLEAN False — which pydantic v2 refuses to coerce into a
+  # string, so the config load would raise and take down every process
+  # that boots it. The loader now folds the boolean back to "off", but
+  # quoting removes the ambiguity.
   #
   # NOT the same as pipeline.dream.dedup_apply: that merges duplicate
   # ENTITIES in the graph at night; this rejects duplicate EPISODES at

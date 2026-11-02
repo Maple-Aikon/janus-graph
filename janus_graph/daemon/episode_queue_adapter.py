@@ -14,6 +14,23 @@ Adds:
                           skip rows where claimed_by != NULL)
   4. ``stats()`` — compact dict for /health queue_stats payload.
 
+THE DEDUP MODE IS CONFIG, NOT A CONSTANT
+------------------------------------------
+The daemon used to hardcode ``DEDUP_GATE_ENFORCE``: it stamped
+``dedup_gate='enforce'`` on every row and rejected every duplicate,
+regardless of ``cfg.pipeline.dedup.mode``. The MCP stdio writer, the
+PicoClaw hook and the daemon were therefore three writers with THREE
+different policies for the same table, and the one an operator could
+NOT turn off was the daemon.
+
+Now the daemon resolves the mode exactly like the MCP stdio writer does:
+``resolve_dedup_mode()`` — same precedence (explicit per-call argument,
+then ``cfg.pipeline.dedup.mode``, then the safe ``off`` default), same
+"an unrecognised value folds to ``off``" rule. The mode is resolved ONCE
+at daemon boot from ``ctx.settings.pipeline.dedup.mode`` (the same
+settings object the MCP server builds), so both writers read the SAME
+config file and the SAME value.
+
 Why not modify pipeline.queue.EpisodeQueue directly:
   - That module is owned by the cron/worker subsystem (Phase 4 gate).
   - Phase 3 daemon is additive: keep EpisodeQueue backward-compatible with
@@ -32,11 +49,13 @@ from typing import Any, Dict, Optional
 
 from ..core.dedup import (
     DEDUP_GATE_ENFORCE,
+    DEDUP_GATE_OBSERVE,
+    DEDUP_GATE_OFF,
     find_active_duplicate,
     record_dedup_event,
 )
 from ..core.payload_hash import canonical_payload_hash
-from ..pipeline.queue import EpisodeQueue
+from ..pipeline.queue import EpisodeQueue, resolve_dedup_mode
 from .phase3_settings import DaemonLockSettings
 
 logger = logging.getLogger("janus_graph.daemon.episode_queue_adapter")
@@ -111,11 +130,41 @@ class EpisodeQueueAdapter:
         queue: EpisodeQueue,
         lock_settings: DaemonLockSettings,
         instance_id: Optional[str] = None,
+        dedup_mode: Optional[str] = None,
     ) -> None:
         self._queue = queue
         self._lock = lock_settings
         # claimed_by tag: "<prefix>:<pid>" (e.g. "daemon:12345")
         self._instance_id = instance_id or f"{lock_settings.instance_id_prefix}:{os.getpid()}"
+        # The dedup policy for THIS daemon. Resolved ONCE at construction
+        # from the daemon's own settings (the same ``cfg.pipeline.dedup.mode``
+        # the MCP stdio writer reads), so the two writers cannot disagree.
+        #
+        # ``None`` means "resolve from the config file at first use" — the
+        # same lazy behaviour as ``pipeline.queue._resolve_dedup_mode``.
+        # The daemon passes the value explicitly at boot (see
+        # ``daemon/lifespan.py``), so the config file is read ONCE, not per
+        # request.
+        self._dedup_mode = dedup_mode
+
+    def _resolve_mode(self, override: Optional[str] = None) -> str:
+        """Resolve the effective dedup mode for one enqueue.
+
+        Precedence (identical to the MCP stdio writer):
+          1. the per-call ``override``;
+          2. the mode resolved at construction time from the daemon's
+             settings;
+          3. ``cfg.pipeline.dedup.mode`` (the config file), read lazily
+             and cached by the shared resolver;
+          4. ``"off"`` — the safe default: the gate is NOT applied.
+
+        An unrecognised value folds to ``"off"``, never to ``"enforce"``.
+        """
+        if override is not None:
+            return resolve_dedup_mode(override)
+        if self._dedup_mode is not None:
+            return resolve_dedup_mode(self._dedup_mode)
+        return resolve_dedup_mode()
 
     # ─── lifecycle ──────────────────────────────────────────────────────
 
@@ -165,6 +214,7 @@ class EpisodeQueueAdapter:
         group_id: str = "graphiti_memory",
         name: Optional[str] = None,
         source_description: str = "daemon_http",
+        dedup_mode: Optional[str] = None,
     ) -> EnqueueResult:
         """Apply lock policy, dedup, and forward to underlying EpisodeQueue.
 
@@ -182,6 +232,7 @@ class EpisodeQueueAdapter:
                 "Set JANUS_DAEMON__LOCK__MODE=daemon_only or dual_with_lock to opt in."
             )
 
+        mode = self._resolve_mode(dedup_mode)
         ph = _payload_hash(content, group_id, source_description)
         claimed_by: Optional[str]
         if self._lock.mode == "daemon_only":
@@ -190,14 +241,38 @@ class EpisodeQueueAdapter:
             claimed_by = self._instance_id
 
         # 1. Dedup check (fast path) — single query, indexed on payload_hash.
-        existing = await asyncio.to_thread(self._find_existing_sync, ph)
-        if existing is not None:
-            # In dual_with_lock, the OTHER writer may have inserted; we treat
-            # any matching hash in active status as duplicate.
-            await asyncio.to_thread(
-                self._record_dedup_event_sync, ph, existing, mode="enforce", action="rejected"
-            )
-            raise EpisodeDuplicateError(existing_episode_id=existing)
+        #
+        #    ``off`` skips the lookup entirely: no hash is stored, nothing
+        #    is detected, nothing is rejected. That is byte-for-byte the
+        #    pre-dedup behaviour, and it matches the MCP stdio writer
+        #    exactly (same mode, same "no lookup, no ledger row" rule).
+        #
+        #    ``observe`` detects and RECORDS the duplicate but still
+        #    enqueues it — rejecting is the one thing observe must never
+        #    do. ``enforce`` detects, records and REJECTS.
+        if mode != DEDUP_GATE_OFF:
+            existing = await asyncio.to_thread(self._find_existing_sync, ph)
+            if existing is not None:
+                if mode == DEDUP_GATE_ENFORCE:
+                    # In dual_with_lock, the OTHER writer may have inserted;
+                    # we treat any matching hash in active status as a
+                    # duplicate.
+                    await asyncio.to_thread(
+                        self._record_dedup_event_sync,
+                        ph,
+                        existing,
+                        mode=mode,
+                        action="rejected",
+                    )
+                    raise EpisodeDuplicateError(existing_episode_id=existing)
+                # observe: log + count, but the episode IS enqueued.
+                await asyncio.to_thread(
+                    self._record_dedup_event_sync,
+                    ph,
+                    existing,
+                    mode=mode,
+                    action="detected",
+                )
 
         # 2. Enqueue + set payload_hash + claimed_by in one transaction.
         #    We bypass EpisodeQueue.enqueue() so we can stamp both new columns
@@ -211,6 +286,7 @@ class EpisodeQueueAdapter:
             source_description=source_description,
             payload_hash=ph,
             claimed_by=claimed_by,
+            mode=mode,
         )
 
         return EnqueueResult(
@@ -227,6 +303,7 @@ class EpisodeQueueAdapter:
         source_description: str,
         payload_hash: str,
         claimed_by: Optional[str],
+        mode: str = "off",
     ) -> str:
         """Single-statement INSERT with payload_hash + claimed_by stamped.
 
@@ -240,11 +317,27 @@ class EpisodeQueueAdapter:
         columns agree. They are separate columns because the legacy one
         also carries the 11 482 backfill rows whose scheme is unknown.
 
-        ``dedup_gate`` is ``'enforce'``: the daemon writer has ALWAYS
-        rejected duplicates (HTTP 409), so its rows are exactly the ones
-        the UNIQUE partial index must protect. Without this stamp the
-        index would not cover daemon rows, and the cross-process race
-        between the daemon and the MCP writer would remain open.
+        ``dedup_gate`` is the RESOLVED MODE, not a constant:
+
+          off      — no legacy hash column, ``dedup_gate='off'``. The row
+                     carries no gate and the UNIQUE partial index does not
+                     cover it. This is the pre-dedup behaviour, byte for
+                     byte.
+          observe  — hash stored, ``dedup_gate='observe'``. The duplicate
+                     is NOT rejected (observe never rejects), and the row
+                     is deliberately OUTSIDE the UNIQUE index's predicate
+                     (``dedup_gate = 'enforce'``) so the index cannot
+                     reject it either.
+          enforce  — hash stored, ``dedup_gate='enforce'``. The row IS
+                     protected by the UNIQUE partial index, which is what
+                     closes the cross-process race between the daemon and
+                     the MCP writer.
+
+        The ``dedup_gate`` stamp is what makes the UNIQUE index cover the
+        row, so it must track the mode exactly. Stamping ``enforce`` while
+        running in ``observe`` would let the DB reject a duplicate that
+        the policy says must be accepted — a data loss caused by a
+        bookkeeping column.
 
         Raises ``EpisodeDuplicateError`` when the UNIQUE index rejects
         the INSERT — i.e. another writer inserted the same active payload
@@ -263,6 +356,16 @@ class EpisodeQueueAdapter:
         }
         payload_json = _json.dumps(payload)
         now = datetime.now(timezone.utc).isoformat()
+
+        # The legacy ``payload_hash`` column is stamped only when the mode
+        # is not ``off`` — same contract as the MCP writer. The CANONICAL
+        # hash is a content ADDRESS, not a gate, so it is always stamped:
+        # the processing-layer backstop asks "was this exact content
+        # already ingested?", and a row written in ``off`` mode with no
+        # hash would be invisible to it.
+        canonical_hash = payload_hash
+        legacy_hash: Optional[str] = payload_hash if mode != DEDUP_GATE_OFF else None
+
         with sqlite3.connect(str(self._queue.db_path), timeout=5.0) as conn:
             conn.row_factory = sqlite3.Row
             try:
@@ -281,10 +384,10 @@ class EpisodeQueueAdapter:
                         ep_id,  # id
                         payload_json,  # payload_json
                         now,  # enqueued_at
-                        payload_hash,  # payload_hash
+                        legacy_hash,  # payload_hash (NULL in off mode)
                         claimed_by,  # claimed_by
-                        payload_hash,  # canonical_hash
-                        DEDUP_GATE_ENFORCE,  # dedup_gate
+                        canonical_hash,  # canonical_hash
+                        mode,  # dedup_gate — the RESOLVED mode
                         now,  # created_at
                         now,  # updated_at
                     ),
@@ -292,6 +395,8 @@ class EpisodeQueueAdapter:
             except sqlite3.IntegrityError:
                 # The UNIQUE index fired: another writer inserted the same
                 # ACTIVE payload between the pre-check and this INSERT.
+                # Only an ``enforce`` row is covered by that index, so this
+                # can only happen in enforce mode.
                 existing = find_active_duplicate(conn, payload_hash)
                 if existing:
                     raise EpisodeDuplicateError(existing_episode_id=existing)
@@ -307,8 +412,8 @@ class EpisodeQueueAdapter:
         self,
         payload_hash: str,
         existing_episode_id: str,
-        mode: str = "enforce",
-        action: str = "rejected",
+        mode: str = DEDUP_GATE_OBSERVE,
+        action: str = "detected",
     ) -> None:
         """Append one row to the durable ``dedup_events`` ledger.
 
@@ -318,6 +423,12 @@ class EpisodeQueueAdapter:
         — which has always rejected duplicates with HTTP 409 — reported
         nothing. A counter that only sees one of three writers is not a
         measure of the gate; it is a measure of one process.
+
+        ``mode`` is the RESOLVED mode (the same string the row was
+        stamped with), and ``action`` is ``"rejected"`` in enforce mode
+        or ``"detected"`` in observe mode — the same vocabulary the MCP
+        writer uses, so the ledger can be read without knowing which
+        writer produced a row.
 
         Never raises: a ledger write must not be able to fail an
         enqueue that is about to be rejected anyway.

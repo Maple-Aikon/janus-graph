@@ -161,6 +161,28 @@ def _resolve_dedup_mode(dedup_mode: Optional[str] = None) -> str:
     return _CONFIG_DEDUP_MODE
 
 
+def resolve_dedup_mode(dedup_mode: Optional[str] = None) -> str:
+    """Public face of :func:`_resolve_dedup_mode`.
+
+    The daemon HTTP writer needs the SAME resolution as the MCP stdio
+    writer — same precedence, same "an unknown value folds to ``off``"
+    rule, same vocabulary. Re-exporting the private helper under a
+    public name means there is ONE implementation and ONE policy: the
+    two writers cannot drift, because there is nothing to drift apart.
+
+    Args:
+        dedup_mode: an explicit per-call mode. ``None`` means "read
+            ``cfg.pipeline.dedup.mode``" (cached process-wide).
+
+    Returns:
+        One of ``DEDUP_MODES`` — never anything else. An unrecognised
+        value folds to ``"off"`` (the gate is NOT applied), never to
+        ``"enforce"``: a typo in the operator's config must not start
+        dropping episodes.
+    """
+    return _resolve_dedup_mode(dedup_mode)
+
+
 def reset_dedup_mode_cache() -> None:
     """Drop the cached config-resolved dedup mode.
 

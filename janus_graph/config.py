@@ -330,6 +330,11 @@ class DedupModeSettings(BaseModel):
     string, and a ``field_validator`` folds an unrecognised value to
     ``"off"`` (the safe mode) with a warning.
 
+    The validator runs in ``mode="before"`` so it can also absorb the
+    YAML 1.1 BOOLEAN trap — PyYAML reads an unquoted ``off`` as the
+    boolean ``False``, which pydantic v2 refuses to coerce into a
+    ``str``. See ``_validate_mode`` for the full story.
+
     The runtime layer (``pipeline.queue._resolve_dedup_mode``) applies
     the same rule independently, so a value that somehow bypasses this
     validator still cannot cause a rejection.
@@ -342,16 +347,58 @@ class DedupModeSettings(BaseModel):
     #: be on by default.
     backstop: DedupBackstopSettings = Field(default_factory=DedupBackstopSettings)
 
-    @field_validator("mode")
+    @field_validator("mode", mode="before")
     @classmethod
-    def _validate_mode(cls, v: str) -> str:
+    def _validate_mode(cls, v: Any) -> str:
         """Fold an unknown mode to ``off`` instead of raising.
 
         ``off`` is the safe fallback: it means "the gate is not
         applied". Falling back to ``enforce`` would turn a typo into
         silent episode drops.
+
+        WHY ``mode="before"`` — THE YAML 1.1 BOOLEAN TRAP
+        --------------------------------------------------
+        PyYAML implements YAML 1.1, where ``off`` / ``on`` / ``yes`` /
+        ``no`` are BOOLEANS. So this config:
+
+            pipeline:
+              dedup:
+                mode: off        # <- unquoted
+
+        does NOT produce the string ``"off"``. It produces the boolean
+        ``False``, and pydantic v2 refuses to coerce a bool into a
+        ``str`` field — so ``JanusSettings()`` RAISES a ValidationError
+        and EVERY process that builds the settings at boot dies (the MCP
+        stdio server, the daemon, the hook's python). The SAFE mode —
+        the one the whole design nominates as the fallback — was
+        unreachable from an unquoted YAML value, and reaching for it
+        took the whole memory system down.
+
+        Measured 2026-11-02 with PyYAML: ``off``→False, ``on``→True,
+        ``yes``→True, ``no``→False; ``enforce``/``observe`` stay
+        strings. The shipped ``config.example.yaml`` already quotes
+        ``"off"``, so the trap only fires when an operator writes the
+        mode unquoted.
+
+        The ``before`` hook maps the booleans back to their intended
+        strings: ``False`` → ``"off"`` (the safe mode), ``True`` →
+        ``"observe"`` — because ``on``/``yes`` most plausibly mean "the
+        gate is on, but do not start dropping episodes yet". Neither
+        boolean can mean ``enforce``: an unquoted YAML boolean must
+        never be able to turn a gate that rejects episodes ON.
         """
         import logging
+
+        if isinstance(v, bool):
+            # YAML 1.1 boolean. See the docstring.
+            folded = "off" if v is False else "observe"
+            logging.getLogger("janus_graph.config").warning(
+                "pipeline.dedup.mode was the YAML boolean %r; reading it as %r "
+                "(quote the value in the YAML to be explicit)",
+                v,
+                folded,
+            )
+            return folded
 
         mode = str(v).strip().lower()
         if mode in ("off", "observe", "enforce"):
